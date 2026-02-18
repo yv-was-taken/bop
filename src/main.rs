@@ -52,7 +52,6 @@ fn cmd_audit(json: bool) -> Result<()> {
                 "Matched profile:".bold(),
                 p.name().green()
             );
-            println!();
 
             let findings = p.audit(&hw);
             let score = bop::audit::calculate_score(&findings);
@@ -64,7 +63,6 @@ fn cmd_audit(json: bool) -> Result<()> {
                     "bop apply --dry-run".cyan(),
                     "sudo bop apply".cyan()
                 );
-                println!();
             }
         }
         None => {

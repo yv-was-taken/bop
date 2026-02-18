@@ -2,7 +2,6 @@ use crate::apply::sysfs_writer;
 use crate::error::{Error, Result};
 use crate::sysfs::SysfsRoot;
 use colored::Colorize;
-use comfy_table::{modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, Cell, Color, Table};
 
 #[derive(Debug, Clone)]
 pub struct WakeController {
@@ -18,45 +17,30 @@ pub fn list() -> Result<()> {
     let sysfs = SysfsRoot::system();
     let controllers = scan_controllers(&sysfs)?;
 
-    println!("{}", "ACPI Wakeup Controllers".bold().underline());
+    println!("{}", " Wake Sources".bold());
     println!();
 
-    let mut table = Table::new();
-    table.load_preset(UTF8_FULL);
-    table.apply_modifier(UTF8_ROUND_CORNERS);
-
-    table.set_header(vec![
-        Cell::new("Controller").fg(Color::Cyan),
-        Cell::new("PCI Address").fg(Color::Cyan),
-        Cell::new("Wake").fg(Color::Cyan),
-        Cell::new("Devices").fg(Color::Cyan),
-        Cell::new("Connected").fg(Color::Cyan),
-    ]);
-
     for ctrl in &controllers {
-        let wake_str = if ctrl.enabled { "enabled" } else { "disabled" };
-        let wake_color = if ctrl.enabled {
-            Color::Green
+        let wake_badge = if ctrl.enabled {
+            "enabled".green().to_string()
         } else {
-            Color::DarkGrey
+            "disabled".dimmed().to_string()
         };
 
-        let devices_str = if ctrl.has_devices {
-            ctrl.device_descriptions.join(", ")
-        } else {
-            "none".to_string()
-        };
+        let addr = ctrl
+            .pci_address
+            .as_deref()
+            .unwrap_or("N/A");
 
-        table.add_row(vec![
-            Cell::new(&ctrl.name),
-            Cell::new(ctrl.pci_address.as_deref().unwrap_or("N/A")),
-            Cell::new(wake_str).fg(wake_color),
-            Cell::new(if ctrl.has_devices { "yes" } else { "no" }),
-            Cell::new(&devices_str),
-        ]);
+        print!("  {:<5} {}  {}", ctrl.name.bold(), wake_badge, addr.dimmed());
+
+        if ctrl.has_devices {
+            print!("  {}", ctrl.device_descriptions.join(", "));
+        }
+
+        println!();
     }
 
-    println!("{table}");
     println!();
 
     // Warn about disabled controllers with devices

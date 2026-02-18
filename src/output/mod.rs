@@ -1,171 +1,179 @@
 use crate::audit::{Finding, Severity};
 use crate::detect::HardwareInfo;
 use colored::Colorize;
-use comfy_table::{modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, Cell, Color, Table};
+
+const LABEL_W: usize = 18;
 
 pub fn print_hardware_summary(hw: &HardwareInfo) {
-    println!("{}", "Hardware Detection".bold().underline());
-    println!();
-
-    let mut table = Table::new();
-    table.load_preset(UTF8_FULL);
-    table.apply_modifier(UTF8_ROUND_CORNERS);
-
-    table.set_header(vec![
-        Cell::new("Component").fg(Color::Cyan),
-        Cell::new("Detected").fg(Color::Cyan),
-    ]);
-
-    // DMI
-    table.add_row(vec![
-        "Board",
-        &format!(
-            "{} {}",
-            hw.dmi.board_vendor.as_deref().unwrap_or("Unknown"),
-            hw.dmi.board_name.as_deref().unwrap_or("")
+    let mut rows: Vec<(&str, String)> = vec![
+        (
+            "Board",
+            format!(
+                "{} {}",
+                hw.dmi.board_vendor.as_deref().unwrap_or("Unknown"),
+                hw.dmi.board_name.as_deref().unwrap_or("")
+            ),
         ),
-    ]);
+        (
+            "Product",
+            hw.dmi
+                .product_name
+                .as_deref()
+                .unwrap_or("Unknown")
+                .to_string(),
+        ),
+        (
+            "CPU",
+            hw.cpu
+                .model_name
+                .as_deref()
+                .unwrap_or("Unknown")
+                .to_string(),
+        ),
+        (
+            "CPU Driver",
+            hw.cpu
+                .scaling_driver
+                .as_deref()
+                .unwrap_or("Unknown")
+                .to_string(),
+        ),
+        (
+            "EPP",
+            hw.cpu.epp.as_deref().unwrap_or("Unknown").to_string(),
+        ),
+        (
+            "GPU Driver",
+            hw.gpu.driver.as_deref().unwrap_or("Unknown").to_string(),
+        ),
+        (
+            "Platform Profile",
+            hw.platform
+                .platform_profile
+                .as_deref()
+                .unwrap_or("N/A")
+                .to_string(),
+        ),
+        (
+            "ASPM Policy",
+            hw.pci
+                .aspm_policy
+                .as_deref()
+                .unwrap_or("N/A")
+                .to_string(),
+        ),
+        (
+            "WiFi",
+            format!(
+                "{} ({})",
+                hw.network.wifi_interface.as_deref().unwrap_or("None"),
+                hw.network.wifi_driver.as_deref().unwrap_or("unknown")
+            ),
+        ),
+    ];
 
-    table.add_row(vec![
-        "Product",
-        hw.dmi.product_name.as_deref().unwrap_or("Unknown"),
-    ]);
-
-    // CPU
-    table.add_row(vec![
-        "CPU",
-        hw.cpu.model_name.as_deref().unwrap_or("Unknown"),
-    ]);
-    table.add_row(vec![
-        "CPU Driver",
-        hw.cpu.scaling_driver.as_deref().unwrap_or("Unknown"),
-    ]);
-    table.add_row(vec![
-        "Governor",
-        hw.cpu.governor.as_deref().unwrap_or("Unknown"),
-    ]);
-    table.add_row(vec![
-        "EPP",
-        hw.cpu.epp.as_deref().unwrap_or("Unknown"),
-    ]);
-
-    // GPU
-    table.add_row(vec![
-        "GPU Driver",
-        hw.gpu.driver.as_deref().unwrap_or("Unknown"),
-    ]);
-
-    // Battery
     if hw.battery.present {
-        if let Some(cap) = hw.battery.usable_capacity_wh() {
-            table.add_row(vec!["Battery Capacity", &format!("{:.1} Wh", cap)]);
-        }
-        if let Some(health) = hw.battery.health_percent {
-            table.add_row(vec!["Battery Health", &format!("{:.1}%", health)]);
+        if let (Some(cap), Some(health)) =
+            (hw.battery.usable_capacity_wh(), hw.battery.health_percent)
+        {
+            rows.push((
+                "Battery",
+                format!("{:.1} Wh ({:.0}% health)", cap, health),
+            ));
         }
         if let Some(power) = hw.battery.power_watts() {
-            table.add_row(vec!["Current Power Draw", &format!("{:.1} W", power)]);
+            rows.push(("Power Draw", format!("{:.1} W", power)));
         }
     }
 
-    // Platform
-    table.add_row(vec![
-        "Platform Profile",
-        hw.platform.platform_profile.as_deref().unwrap_or("N/A"),
-    ]);
-    table.add_row(vec![
-        "Sleep Mode",
-        hw.platform.mem_sleep.as_deref().unwrap_or("N/A"),
-    ]);
+    // Box width from content
+    let inner_w = rows
+        .iter()
+        .map(|(l, v)| l.len().max(LABEL_W) + 2 + v.len())
+        .max()
+        .unwrap_or(40);
 
-    // PCI
-    table.add_row(vec![
-        "ASPM Policy",
-        hw.pci.aspm_policy.as_deref().unwrap_or("N/A"),
-    ]);
-    table.add_row(vec![
-        "PCI Devices",
-        &format!("{}", hw.pci.devices.len()),
-    ]);
+    let title = "Hardware";
+    let fill = inner_w.saturating_sub(1 + title.len());
+    println!("╭─ {} {}╮", title.bold(), "─".repeat(fill));
 
-    // Network
-    table.add_row(vec![
-        "WiFi",
-        &format!(
-            "{} ({})",
-            hw.network.wifi_interface.as_deref().unwrap_or("None"),
-            hw.network.wifi_driver.as_deref().unwrap_or("unknown")
-        ),
-    ]);
+    for (label, value) in &rows {
+        let padded = format!("{:<w$}", label, w = LABEL_W);
+        let pad = inner_w.saturating_sub(LABEL_W + 2 + value.len());
+        println!(
+            "│ {}  {}{} │",
+            padded.dimmed(),
+            value,
+            " ".repeat(pad)
+        );
+    }
 
-    println!("{table}");
-    println!();
+    println!("╰{}╯", "─".repeat(inner_w + 2));
 }
 
 pub fn print_audit_findings(findings: &[Finding], score: u32) {
-    println!("{}", "Audit Findings".bold().underline());
-    println!();
-
     if findings.is_empty() {
-        println!("{}", "  No issues found! System is well optimized.".green());
-        println!();
+        println!(
+            "{}",
+            "  No issues found. System is well optimized.".green()
+        );
         return;
     }
 
-    let mut table = Table::new();
-    table.load_preset(UTF8_FULL);
-    table.apply_modifier(UTF8_ROUND_CORNERS);
-
-    table.set_header(vec![
-        Cell::new("Sev").fg(Color::Cyan),
-        Cell::new("Category").fg(Color::Cyan),
-        Cell::new("Finding").fg(Color::Cyan),
-        Cell::new("Current").fg(Color::Cyan),
-        Cell::new("Recommended").fg(Color::Cyan),
-        Cell::new("Impact").fg(Color::Cyan),
-    ]);
-
-    // Sort by severity (high first)
     let mut sorted: Vec<&Finding> = findings.iter().collect();
     sorted.sort_by_key(|f| std::cmp::Reverse(f.severity));
 
+    let count = findings.len();
+    let title = format!("Findings ({})", count);
+    let divider_w: usize = 64;
+    let fill = divider_w.saturating_sub(2 + title.len());
+    println!("── {} {}", title.bold(), "─".repeat(fill));
+
+    let mut prev_severity: Option<Severity> = None;
     for finding in sorted {
-        let (sev_str, sev_color) = match finding.severity {
-            Severity::High => ("HIGH", Color::Red),
-            Severity::Medium => ("MED", Color::Yellow),
-            Severity::Low => ("LOW", Color::Blue),
-            Severity::Info => ("INFO", Color::DarkGrey),
+        if prev_severity.is_some() && prev_severity != Some(finding.severity) {
+            println!();
+        }
+        prev_severity = Some(finding.severity);
+
+        let sev = match finding.severity {
+            Severity::High => "HIGH".red().bold(),
+            Severity::Medium => " MED".yellow().bold(),
+            Severity::Low => " LOW".blue().bold(),
+            Severity::Info => "INFO".dimmed().bold(),
         };
 
-        table.add_row(vec![
-            Cell::new(sev_str).fg(sev_color),
-            Cell::new(&finding.category),
-            Cell::new(&finding.description),
-            Cell::new(&finding.current_value),
-            Cell::new(&finding.recommended_value),
-            Cell::new(&finding.impact),
-        ]);
+        println!("  {} {}", sev, finding.description);
+
+        let mut detail_parts = Vec::new();
+        if !finding.current_value.is_empty() && !finding.recommended_value.is_empty() {
+            detail_parts.push(format!(
+                "{} → {}",
+                finding.current_value, finding.recommended_value
+            ));
+        } else if !finding.current_value.is_empty() {
+            detail_parts.push(finding.current_value.clone());
+        } else if !finding.recommended_value.is_empty() {
+            detail_parts.push(finding.recommended_value.clone());
+        }
+        if !finding.impact.is_empty() {
+            detail_parts.push(finding.impact.clone());
+        }
+        if !detail_parts.is_empty() {
+            println!("       {}", detail_parts.join("  ·  ").dimmed());
+        }
     }
 
-    println!("{table}");
-    println!();
+    println!("{}", "─".repeat(divider_w));
 
-    // Score
-    let score_color = if score >= 80 {
-        "green"
+    let score_str = format!("Score: {}/100", score);
+    if score >= 80 {
+        println!("  {}", score_str.green().bold());
     } else if score >= 50 {
-        "yellow"
+        println!("  {}", score_str.yellow().bold());
     } else {
-        "red"
-    };
-
-    let score_str = format!("Power Optimization Score: {}/100", score);
-    match score_color {
-        "green" => println!("  {}", score_str.green().bold()),
-        "yellow" => println!("  {}", score_str.yellow().bold()),
-        _ => println!("  {}", score_str.red().bold()),
+        println!("  {}", score_str.red().bold());
     }
-    println!();
 }
 
 pub fn print_audit_json(hw: &HardwareInfo, findings: &[Finding], score: u32, profile_name: &str) {
