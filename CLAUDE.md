@@ -50,6 +50,12 @@ let hw = HardwareInfo::detect(&sysfs);   // Works against mock data
 
 This enables testing detection, profile matching, audit checks, and scoring without root access or real hardware. When adding new audit checks or detection modules, extend the fixture and add corresponding test assertions.
 
+## Git Workflow
+
+- **Never merge PRs or push directly to master** unless the user explicitly says to merge. Always create PRs for review.
+- When creating PRs, sort by code significance: correctness bugs first, then data-loss bugs, then behavioral fixes.
+- Use `git worktree` for parallel fix branches. Worktrees live at `/home/ywvlfy/Projects/bop/<branch-name>/`.
+
 ## Key Details
 
 - The real Framework 16 board name is `FRANMZCP09` (not containing "16"), so `is_framework_16()` checks `product_name` which contains "Laptop 16".
