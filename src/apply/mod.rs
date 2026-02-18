@@ -8,9 +8,36 @@ use crate::error::{Error, Result};
 use crate::sysfs::SysfsRoot;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+#[cfg(test)]
+use std::sync::{LazyLock, Mutex};
 
 const STATE_DIR: &str = "/var/lib/bop";
 const STATE_FILE: &str = "/var/lib/bop/state.json";
+
+#[cfg(test)]
+static STATE_FILE_OVERRIDE: LazyLock<Mutex<Option<PathBuf>>> = LazyLock::new(|| Mutex::new(None));
+
+fn state_file_path() -> PathBuf {
+    #[cfg(test)]
+    {
+        if let Some(path) = STATE_FILE_OVERRIDE
+            .lock()
+            .expect("state file override lock poisoned")
+            .clone()
+        {
+            return path;
+        }
+    }
+
+    PathBuf::from(STATE_FILE)
+}
+
+fn state_dir_path() -> PathBuf {
+    state_file_path()
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from(STATE_DIR))
+}
 
 /// Represents all changes made by bop, for reverting.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -32,8 +59,19 @@ pub struct SysfsChange {
 }
 
 impl ApplyState {
+    pub(crate) fn file_path() -> PathBuf {
+        state_file_path()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_file_path_override_for_tests(path: Option<PathBuf>) {
+        *STATE_FILE_OVERRIDE
+            .lock()
+            .expect("state file override lock poisoned") = path;
+    }
+
     pub fn load() -> Result<Option<Self>> {
-        let path = PathBuf::from(STATE_FILE);
+        let path = state_file_path();
         if !path.exists() {
             return Ok(None);
         }
@@ -45,17 +83,17 @@ impl ApplyState {
     }
 
     pub fn save(&self) -> Result<()> {
-        std::fs::create_dir_all(STATE_DIR)
+        std::fs::create_dir_all(state_dir_path())
             .map_err(|e| Error::State(format!("failed to create state dir: {}", e)))?;
         let data = serde_json::to_string_pretty(self)
             .map_err(|e| Error::State(format!("failed to serialize state: {}", e)))?;
-        std::fs::write(STATE_FILE, data)
+        std::fs::write(state_file_path(), data)
             .map_err(|e| Error::State(format!("failed to write state file: {}", e)))?;
         Ok(())
     }
 
     pub fn remove_file() -> Result<()> {
-        let path = PathBuf::from(STATE_FILE);
+        let path = state_file_path();
         if path.exists() {
             std::fs::remove_file(&path)
                 .map_err(|e| Error::State(format!("failed to remove state file: {}", e)))?;
@@ -212,7 +250,10 @@ pub fn execute_plan(plan: &ApplyPlan, hw: &HardwareInfo, dry_run: bool) -> Resul
     // Apply sysfs writes
     for write in &plan.sysfs_writes {
         let relative = write.path.strip_prefix('/').unwrap_or(&write.path);
-        let original = sysfs.read_optional(relative).unwrap_or(None).unwrap_or_default();
+        let original = sysfs
+            .read_optional(relative)
+            .unwrap_or(None)
+            .unwrap_or_default();
 
         if dry_run {
             println!(
@@ -319,7 +360,11 @@ pub fn print_plan(plan: &ApplyPlan) {
     if !plan.sysfs_writes.is_empty() {
         println!("  {} Runtime sysfs changes:", ">>".cyan());
         for write in &plan.sysfs_writes {
-            println!("     {} {}", write.description.dimmed(), write.path.dimmed());
+            println!(
+                "     {} {}",
+                write.description.dimmed(),
+                write.path.dimmed()
+            );
         }
         println!();
     }
