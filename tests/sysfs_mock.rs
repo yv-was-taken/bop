@@ -14,7 +14,11 @@ fn create_framework16_fixture(root: &Path) {
     fs::create_dir_all(&dmi).unwrap();
     fs::write(dmi.join("board_vendor"), "Framework\n").unwrap();
     fs::write(dmi.join("board_name"), "FRANMDCP16\n").unwrap();
-    fs::write(dmi.join("product_name"), "Laptop 16 (AMD Ryzen 7040 Series)\n").unwrap();
+    fs::write(
+        dmi.join("product_name"),
+        "Laptop 16 (AMD Ryzen 7040 Series)\n",
+    )
+    .unwrap();
     fs::write(dmi.join("product_family"), "Framework Laptop\n").unwrap();
     fs::write(dmi.join("bios_version"), "03.05\n").unwrap();
 
@@ -98,7 +102,11 @@ fn create_framework16_fixture(root: &Path) {
     let pci_base = root.join("sys/bus/pci/devices");
     let aspm = root.join("sys/module/pcie_aspm/parameters");
     fs::create_dir_all(&aspm).unwrap();
-    fs::write(aspm.join("policy"), "default [default] performance powersave powersupersave\n").unwrap();
+    fs::write(
+        aspm.join("policy"),
+        "default [default] performance powersave powersupersave\n",
+    )
+    .unwrap();
 
     for (addr, control) in &[
         ("0000:00:00.0", "on"),
@@ -154,10 +162,7 @@ fn test_framework16_detection() {
     assert_eq!(hw.cpu.model, Some(116));
     assert_eq!(hw.cpu.online_cpus, 16);
     assert_eq!(hw.cpu.epp.as_deref(), Some("balance_performance"));
-    assert_eq!(
-        hw.platform.platform_profile.as_deref(),
-        Some("performance")
-    );
+    assert_eq!(hw.platform.platform_profile.as_deref(), Some("performance"));
     assert!(hw.battery.present);
     assert!(hw.battery.is_discharging());
     assert!(hw.gpu.is_amd());
@@ -264,12 +269,7 @@ fn test_score_calculation() {
     assert_eq!(audit::calculate_score(&[]), 100);
 
     // Single high-weight finding
-    let findings = vec![audit::Finding::new(
-        audit::Severity::High,
-        "Test",
-        "test",
-    )
-    .weight(10)];
+    let findings = vec![audit::Finding::new(audit::Severity::High, "Test", "test").weight(10)];
     let score = audit::calculate_score(&findings);
     assert_eq!(score, 0); // 10/10 penalty = 100% penalty
 
