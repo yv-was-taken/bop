@@ -103,9 +103,8 @@ pub fn remove_service() -> Result<()> {
             .args(["stop", "bop-powersave.service"])
             .status();
 
-        std::fs::remove_file(service_path).map_err(|e| {
-            Error::Other(format!("failed to remove {}: {}", SERVICE_PATH, e))
-        })?;
+        std::fs::remove_file(service_path)
+            .map_err(|e| Error::Other(format!("failed to remove {}: {}", SERVICE_PATH, e)))?;
 
         let _ = std::process::Command::new("systemctl")
             .args(["daemon-reload"])
