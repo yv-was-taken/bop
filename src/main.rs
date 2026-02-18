@@ -47,11 +47,7 @@ fn cmd_audit(json: bool) -> Result<()> {
 
     match profile {
         Some(ref p) => {
-            println!(
-                "  {} {}",
-                "Matched profile:".bold(),
-                p.name().green()
-            );
+            println!("  {} {}", "Matched profile:".bold(), p.name().green());
 
             let findings = p.audit(&hw);
             let score = bop::audit::calculate_score(&findings);
@@ -88,7 +84,9 @@ fn cmd_apply(dry_run: bool) -> Result<()> {
 
     let profile = bop::profile::detect_profile(&hw);
     if profile.is_none() {
-        anyhow::bail!("No hardware profile matched. Cannot apply optimizations for unknown hardware.");
+        anyhow::bail!(
+            "No hardware profile matched. Cannot apply optimizations for unknown hardware."
+        );
     }
 
     let plan = bop::apply::build_plan(&hw, &sysfs);
@@ -105,10 +103,7 @@ fn cmd_apply(dry_run: bool) -> Result<()> {
     }
 
     // Confirm
-    println!(
-        "{}",
-        "This will apply the changes listed above.".bold()
-    );
+    println!("{}", "This will apply the changes listed above.".bold());
     print!("Continue? [y/N] ");
     std::io::Write::flush(&mut std::io::stdout())?;
 
