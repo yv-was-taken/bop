@@ -228,17 +228,65 @@ fn is_service_active_or_enabled(service: &str) -> bool {
             .is_ok_and(|s| s.success())
 }
 
-/// Execute the apply plan.
-pub fn execute_plan(plan: &ApplyPlan, hw: &HardwareInfo, dry_run: bool) -> Result<ApplyState> {
-    if !dry_run && !nix::unistd::geteuid().is_root() {
-        return Err(Error::NotRoot {
-            operation: "apply".to_string(),
-        });
+trait ApplyOps {
+    fn write_sysfs(&mut self, path: &str, value: &str) -> Result<()>;
+    fn toggle_acpi_wakeup(&mut self, device: &str) -> Result<()>;
+    fn add_kernel_params(&mut self, params: &[String]) -> Result<()>;
+    fn disable_service(&mut self, service: &str) -> Result<()>;
+    fn generate_service(&mut self, hw: &HardwareInfo, plan: &ApplyPlan) -> Result<PathBuf>;
+    fn enable_systemd_service(&mut self) -> Result<()>;
+    fn save_state(&mut self, state: &ApplyState) -> Result<()>;
+}
+
+struct RealApplyOps;
+
+impl ApplyOps for RealApplyOps {
+    fn write_sysfs(&mut self, path: &str, value: &str) -> Result<()> {
+        sysfs_writer::write_sysfs(path, value)
     }
 
-    // Check for conflicts
-    check_conflicts()?;
+    fn toggle_acpi_wakeup(&mut self, device: &str) -> Result<()> {
+        sysfs_writer::toggle_acpi_wakeup(device)
+    }
 
+    fn add_kernel_params(&mut self, params: &[String]) -> Result<()> {
+        kernel_params::add_kernel_params(params)
+    }
+
+    fn disable_service(&mut self, service: &str) -> Result<()> {
+        services::disable_service(service)
+    }
+
+    fn generate_service(&mut self, hw: &HardwareInfo, plan: &ApplyPlan) -> Result<PathBuf> {
+        systemd::generate_service(hw, plan)
+    }
+
+    fn enable_systemd_service(&mut self) -> Result<()> {
+        systemd::enable_service()
+    }
+
+    fn save_state(&mut self, state: &ApplyState) -> Result<()> {
+        state.save()
+    }
+}
+
+fn persist_state_checkpoint(
+    ops: &mut impl ApplyOps,
+    state: &ApplyState,
+    dry_run: bool,
+) -> Result<()> {
+    if !dry_run {
+        ops.save_state(state)?;
+    }
+    Ok(())
+}
+
+fn execute_plan_with_ops(
+    plan: &ApplyPlan,
+    hw: &HardwareInfo,
+    dry_run: bool,
+    ops: &mut impl ApplyOps,
+) -> Result<ApplyState> {
     let mut state = ApplyState {
         timestamp: chrono::Utc::now().to_rfc3339(),
         ..Default::default()
@@ -246,7 +294,7 @@ pub fn execute_plan(plan: &ApplyPlan, hw: &HardwareInfo, dry_run: bool) -> Resul
 
     let sysfs = SysfsRoot::system();
 
-    // Apply sysfs writes
+    // Apply runtime sysfs writes.
     for write in &plan.sysfs_writes {
         let relative = write.path.strip_prefix('/').unwrap_or(&write.path);
         let original = sysfs
@@ -260,7 +308,7 @@ pub fn execute_plan(plan: &ApplyPlan, hw: &HardwareInfo, dry_run: bool) -> Resul
                 write.path, write.value, original
             );
         } else {
-            sysfs_writer::write_sysfs(&write.path, &write.value)?;
+            ops.write_sysfs(&write.path, &write.value)?;
             state.sysfs_changes.push(SysfsChange {
                 path: write.path.clone(),
                 original_value: original,
@@ -269,20 +317,19 @@ pub fn execute_plan(plan: &ApplyPlan, hw: &HardwareInfo, dry_run: bool) -> Resul
         }
     }
 
-    // ACPI wakeup toggling
+    // ACPI wakeup toggling.
     for device in &plan.acpi_wakeup_disable {
         if dry_run {
             println!("  [dry-run] Disable ACPI wakeup: {}", device);
-        } else {
-            // /proc/acpi/wakeup is a toggle - check current state first
-            if is_wakeup_enabled(device, &sysfs) {
-                sysfs_writer::toggle_acpi_wakeup(device)?;
-                state.acpi_wakeup_toggled.push(device.clone());
-            }
+        } else if is_wakeup_enabled(device, &sysfs) {
+            // /proc/acpi/wakeup is a toggle - only flip currently enabled sources.
+            ops.toggle_acpi_wakeup(device)?;
+            state.acpi_wakeup_toggled.push(device.clone());
         }
     }
+    persist_state_checkpoint(ops, &state, dry_run)?;
 
-    // Kernel params
+    // Kernel params.
     if !plan.kernel_params.is_empty() {
         if dry_run {
             println!(
@@ -290,40 +337,54 @@ pub fn execute_plan(plan: &ApplyPlan, hw: &HardwareInfo, dry_run: bool) -> Resul
                 plan.kernel_params.join(" ")
             );
         } else {
-            kernel_params::add_kernel_params(&plan.kernel_params)?;
+            ops.add_kernel_params(&plan.kernel_params)?;
             state.kernel_params_added = plan.kernel_params.clone();
         }
     }
+    persist_state_checkpoint(ops, &state, dry_run)?;
 
-    // Service management
+    // Service management.
     for svc in &plan.services_to_disable {
         if dry_run {
             println!("  [dry-run] Disable service: {}", svc);
         } else {
-            services::disable_service(svc)?;
+            ops.disable_service(svc)?;
             state.services_disabled.push(svc.clone());
         }
     }
+    persist_state_checkpoint(ops, &state, dry_run)?;
 
-    // Generate systemd oneshot service
+    // Generate/enable persistence service.
     if plan.systemd_service && !plan.sysfs_writes.is_empty() {
         if dry_run {
             println!("  [dry-run] Generate bop-powersave.service");
         } else {
-            let unit_path = systemd::generate_service(hw, plan)?;
+            let unit_path = ops.generate_service(hw, plan)?;
             state
                 .systemd_units_created
                 .push(unit_path.to_string_lossy().into_owned());
-            systemd::enable_service()?;
+            // Persist immediately so a later enable failure can still be reverted.
+            persist_state_checkpoint(ops, &state, dry_run)?;
+            ops.enable_systemd_service()?;
         }
     }
 
-    // Save state
-    if !dry_run {
-        state.save()?;
+    Ok(state)
+}
+
+/// Execute the apply plan.
+pub fn execute_plan(plan: &ApplyPlan, hw: &HardwareInfo, dry_run: bool) -> Result<ApplyState> {
+    if !dry_run && !nix::unistd::geteuid().is_root() {
+        return Err(Error::NotRoot {
+            operation: "apply".to_string(),
+        });
     }
 
-    Ok(state)
+    // Check for conflicts
+    check_conflicts()?;
+
+    let mut ops = RealApplyOps;
+    execute_plan_with_ops(plan, hw, dry_run, &mut ops)
 }
 
 fn check_conflicts() -> Result<()> {
@@ -452,5 +513,156 @@ pub fn print_plan(plan: &ApplyPlan) {
             ">>".cyan()
         );
         println!();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+    use tempfile::TempDir;
+
+    struct TestApplyOps {
+        state_path: PathBuf,
+        fail_generate_service: bool,
+        fail_enable_service: bool,
+        checkpoint_count: usize,
+    }
+
+    impl TestApplyOps {
+        fn new(state_path: PathBuf) -> Self {
+            Self {
+                state_path,
+                fail_generate_service: false,
+                fail_enable_service: false,
+                checkpoint_count: 0,
+            }
+        }
+    }
+
+    impl ApplyOps for TestApplyOps {
+        fn write_sysfs(&mut self, path: &str, value: &str) -> Result<()> {
+            std::fs::write(path, value).map_err(|source| Error::SysfsWrite {
+                path: PathBuf::from(path),
+                source,
+            })
+        }
+
+        fn toggle_acpi_wakeup(&mut self, _device: &str) -> Result<()> {
+            Ok(())
+        }
+
+        fn add_kernel_params(&mut self, _params: &[String]) -> Result<()> {
+            Ok(())
+        }
+
+        fn disable_service(&mut self, _service: &str) -> Result<()> {
+            Ok(())
+        }
+
+        fn generate_service(&mut self, _hw: &HardwareInfo, _plan: &ApplyPlan) -> Result<PathBuf> {
+            if self.fail_generate_service {
+                return Err(Error::Other(
+                    "injected systemd generation failure".to_string(),
+                ));
+            }
+            Ok(PathBuf::from("/etc/systemd/system/bop-powersave.service"))
+        }
+
+        fn enable_systemd_service(&mut self) -> Result<()> {
+            if self.fail_enable_service {
+                return Err(Error::Other("injected systemd enable failure".to_string()));
+            }
+            Ok(())
+        }
+
+        fn save_state(&mut self, state: &ApplyState) -> Result<()> {
+            self.checkpoint_count += 1;
+            if let Some(parent) = self.state_path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| Error::State(format!("failed to create state dir: {}", e)))?;
+            }
+            let data = serde_json::to_string_pretty(state)
+                .map_err(|e| Error::State(format!("failed to serialize state: {}", e)))?;
+            std::fs::write(&self.state_path, data)
+                .map_err(|e| Error::State(format!("failed to write state file: {}", e)))?;
+            Ok(())
+        }
+    }
+
+    fn minimal_hw() -> HardwareInfo {
+        let tmp = TempDir::new().unwrap();
+        HardwareInfo::detect(&SysfsRoot::new(tmp.path()))
+    }
+
+    fn read_state(path: &Path) -> ApplyState {
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    fn basic_plan(sysfs_path: &Path) -> ApplyPlan {
+        ApplyPlan {
+            sysfs_writes: vec![PlannedSysfsWrite {
+                path: sysfs_path.to_string_lossy().into_owned(),
+                value: "new".to_string(),
+                description: "test write".to_string(),
+            }],
+            kernel_params: Vec::new(),
+            services_to_disable: Vec::new(),
+            acpi_wakeup_disable: Vec::new(),
+            systemd_service: true,
+            modprobe_configs: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_execute_plan_persists_sysfs_state_before_systemd_generation_failure() {
+        let tmp = TempDir::new().unwrap();
+        let state_path = tmp.path().join("state.json");
+        let sysfs_path = tmp.path().join("sysfs-value");
+        std::fs::write(&sysfs_path, "old").unwrap();
+
+        let hw = minimal_hw();
+        let plan = basic_plan(&sysfs_path);
+        let mut ops = TestApplyOps::new(state_path.clone());
+        ops.fail_generate_service = true;
+
+        let result = execute_plan_with_ops(&plan, &hw, false, &mut ops);
+        assert!(result.is_err());
+
+        let persisted = read_state(&state_path);
+        assert_eq!(persisted.sysfs_changes.len(), 1);
+        assert_eq!(persisted.sysfs_changes[0].path, plan.sysfs_writes[0].path);
+        assert_eq!(persisted.sysfs_changes[0].original_value, "old");
+        assert_eq!(persisted.sysfs_changes[0].new_value, "new");
+        assert!(persisted.systemd_units_created.is_empty());
+    }
+
+    #[test]
+    fn test_execute_plan_persists_created_unit_before_systemd_enable_failure() {
+        let tmp = TempDir::new().unwrap();
+        let state_path = tmp.path().join("state.json");
+        let sysfs_path = tmp.path().join("sysfs-value");
+        std::fs::write(&sysfs_path, "old").unwrap();
+
+        let hw = minimal_hw();
+        let mut plan = basic_plan(&sysfs_path);
+        plan.kernel_params = vec!["acpi.ec_no_wakeup=1".to_string()];
+        plan.services_to_disable = vec!["dummy.service".to_string()];
+
+        let mut ops = TestApplyOps::new(state_path.clone());
+        ops.fail_enable_service = true;
+
+        let result = execute_plan_with_ops(&plan, &hw, false, &mut ops);
+        assert!(result.is_err());
+
+        let persisted = read_state(&state_path);
+        assert_eq!(persisted.sysfs_changes.len(), 1);
+        assert_eq!(persisted.kernel_params_added, plan.kernel_params);
+        assert_eq!(persisted.services_disabled, plan.services_to_disable);
+        assert_eq!(
+            persisted.systemd_units_created,
+            vec!["/etc/systemd/system/bop-powersave.service".to_string()]
+        );
+        assert_eq!(ops.checkpoint_count, 4);
     }
 }
