@@ -13,23 +13,40 @@ pub fn run() -> Result<()> {
 
     println!("{}", "Power Monitor".bold().underline());
     println!("Press Ctrl+C to stop");
-    println!();
-
-    // Print header
-    println!(
-        "{:>8} {:>10} {:>10} {:>10} {:>10} {:>10}",
-        "Time".dimmed(),
-        "Battery W".cyan(),
-        "CPU W".cyan(),
-        "SoC W".cyan(),
-        "Batt %".cyan(),
-        "Est Hours".cyan(),
-    );
-    println!("{}", "-".repeat(68).dimmed());
 
     let start = Instant::now();
     let rapl = power_draw::RaplReader::new(&sysfs);
     let mut prev_rapl = rapl.read_energy();
+
+    let has_rapl = prev_rapl.is_some();
+    if !has_rapl {
+        println!(
+            "  {} RAPL counters unavailable (try running with sudo for CPU/SoC power)",
+            "Note:".yellow()
+        );
+    }
+
+    println!();
+    if has_rapl {
+        println!(
+            "{:>8} {:>10} {:>10} {:>10} {:>10} {:>10}",
+            "Time".dimmed(),
+            "Battery W".cyan(),
+            "CPU W".cyan(),
+            "SoC W".cyan(),
+            "Batt %".cyan(),
+            "Est Hours".cyan(),
+        );
+    } else {
+        println!(
+            "{:>8} {:>10} {:>10} {:>10}",
+            "Time".dimmed(),
+            "Battery W".cyan(),
+            "Batt %".cyan(),
+            "Est Hours".cyan(),
+        );
+    }
+    println!("{}", "-".repeat(if has_rapl { 68 } else { 46 }).dimmed());
 
     loop {
         std::thread::sleep(Duration::from_secs(2));
@@ -63,26 +80,34 @@ pub fn run() -> Result<()> {
             elapsed.as_secs() % 60
         );
 
-        print!(
-            "\r{:>8} {:>10} {:>10} {:>10} {:>10} {:>10}",
-            time_str,
-            bat_power
-                .map(|w| format!("{:.1}W", w))
-                .unwrap_or_else(|| "N/A".to_string()),
-            cpu_power
-                .map(|w| format!("{:.1}W", w))
-                .unwrap_or_else(|| "N/A".to_string()),
-            soc_power
-                .map(|w| format!("{:.1}W", w))
-                .unwrap_or_else(|| "N/A".to_string()),
-            battery
-                .capacity_percent
-                .map(|p| format!("{}%", p))
-                .unwrap_or_else(|| "N/A".to_string()),
-            est_hours
-                .map(|h| format!("{:.1}h", h))
-                .unwrap_or_else(|| "N/A".to_string()),
-        );
+        let fmt = |v: Option<f64>, suffix: &str| -> String {
+            v.map(|w| format!("{:.1}{}", w, suffix))
+                .unwrap_or_else(|| "N/A".to_string())
+        };
+        let batt_pct = battery
+            .capacity_percent
+            .map(|p| format!("{}%", p))
+            .unwrap_or_else(|| "N/A".to_string());
+
+        if has_rapl {
+            print!(
+                "\r{:>8} {:>10} {:>10} {:>10} {:>10} {:>10}",
+                time_str,
+                fmt(bat_power, "W"),
+                fmt(cpu_power, "W"),
+                fmt(soc_power, "W"),
+                batt_pct,
+                fmt(est_hours, "h"),
+            );
+        } else {
+            print!(
+                "\r{:>8} {:>10} {:>10} {:>10}",
+                time_str,
+                fmt(bat_power, "W"),
+                batt_pct,
+                fmt(est_hours, "h"),
+            );
+        }
         let _ = std::io::stdout().flush();
 
         // Move to next line every 10 readings for scrollback
