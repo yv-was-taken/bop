@@ -14,11 +14,7 @@ pub fn add_kernel_params(params: &[String]) -> Result<()> {
     let entries: Vec<_> = std::fs::read_dir(entries_dir)
         .map_err(|e| Error::Bootloader(format!("failed to read entries dir: {}", e)))?
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .is_some_and(|ext| ext == "conf")
-        })
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "conf"))
         .collect();
 
     if entries.is_empty() {
@@ -91,11 +87,7 @@ pub fn remove_kernel_params(params: &[String]) -> Result<()> {
     let entries: Vec<_> = std::fs::read_dir(entries_dir)
         .map_err(|e| Error::Bootloader(format!("failed to read entries dir: {}", e)))?
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .is_some_and(|ext| ext == "conf")
-        })
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "conf"))
         .collect();
 
     for entry in &entries {

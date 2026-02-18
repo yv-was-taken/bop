@@ -31,8 +31,7 @@ impl PlatformInfo {
             .read_optional("sys/firmware/acpi/platform_profile_choices")
             .unwrap_or(None)
         {
-            info.platform_profiles_available =
-                avail.split_whitespace().map(String::from).collect();
+            info.platform_profiles_available = avail.split_whitespace().map(String::from).collect();
         }
 
         // Sleep states
@@ -49,10 +48,7 @@ impl PlatformInfo {
             }
             if info.mem_sleep.is_none() {
                 // If no brackets, first entry is current
-                info.mem_sleep = mem_sleep
-                    .split_whitespace()
-                    .next()
-                    .map(String::from);
+                info.mem_sleep = mem_sleep.split_whitespace().next().map(String::from);
             }
         }
 

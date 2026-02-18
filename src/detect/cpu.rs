@@ -56,9 +56,7 @@ impl CpuInfo {
 
         // Energy Performance Preference
         info.epp = sysfs
-            .read_optional(
-                "sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference",
-            )
+            .read_optional("sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference")
             .unwrap_or(None);
 
         // Available EPP values

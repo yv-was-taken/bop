@@ -38,10 +38,7 @@ impl SysfsRoot {
         let path = self.path(relative);
         std::fs::read_to_string(&path)
             .map(|s| s.trim().to_string())
-            .map_err(|e| Error::SysfsRead {
-                path,
-                source: e,
-            })
+            .map_err(|e| Error::SysfsRead { path, source: e })
     }
 
     /// Read a sysfs file, returning None if it doesn't exist.
@@ -58,10 +55,7 @@ impl SysfsRoot {
     /// Write a value to a sysfs file.
     pub fn write(&self, relative: impl AsRef<Path>, value: &str) -> Result<()> {
         let path = self.path(relative);
-        std::fs::write(&path, value).map_err(|e| Error::SysfsWrite {
-            path,
-            source: e,
-        })
+        std::fs::write(&path, value).map_err(|e| Error::SysfsWrite { path, source: e })
     }
 
     /// Read a sysfs file and parse it as a specific type.
