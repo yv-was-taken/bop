@@ -114,9 +114,7 @@ fn controller_has_devices(controller_name: &str, sysfs: &SysfsRoot) -> bool {
                 let bus_num = usb_dev.trim_start_matches("usb");
                 for other_dev in &usb_devices {
                     // Child devices have format: N-X or N-X.Y (where N is bus number)
-                    if other_dev.starts_with(&format!("{}-", bus_num))
-                        && !other_dev.contains(':')
-                    {
+                    if other_dev.starts_with(&format!("{}-", bus_num)) && !other_dev.contains(':') {
                         return true;
                     }
                 }

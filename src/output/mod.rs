@@ -56,11 +56,7 @@ pub fn print_hardware_summary(hw: &HardwareInfo) {
         ),
         (
             "ASPM Policy",
-            hw.pci
-                .aspm_policy
-                .as_deref()
-                .unwrap_or("N/A")
-                .to_string(),
+            hw.pci.aspm_policy.as_deref().unwrap_or("N/A").to_string(),
         ),
         (
             "WiFi",
@@ -76,10 +72,7 @@ pub fn print_hardware_summary(hw: &HardwareInfo) {
         if let (Some(cap), Some(health)) =
             (hw.battery.usable_capacity_wh(), hw.battery.health_percent)
         {
-            rows.push((
-                "Battery",
-                format!("{:.1} Wh ({:.0}% health)", cap, health),
-            ));
+            rows.push(("Battery", format!("{:.1} Wh ({:.0}% health)", cap, health)));
         }
         if let Some(power) = hw.battery.power_watts() {
             rows.push(("Power Draw", format!("{:.1} W", power)));
@@ -100,12 +93,7 @@ pub fn print_hardware_summary(hw: &HardwareInfo) {
     for (label, value) in &rows {
         let padded = format!("{:<w$}", label, w = LABEL_W);
         let pad = inner_w.saturating_sub(LABEL_W + 2 + value.len());
-        println!(
-            "│ {}  {}{} │",
-            padded.dimmed(),
-            value,
-            " ".repeat(pad)
-        );
+        println!("│ {}  {}{} │", padded.dimmed(), value, " ".repeat(pad));
     }
 
     println!("╰{}╯", "─".repeat(inner_w + 2));
@@ -113,10 +101,7 @@ pub fn print_hardware_summary(hw: &HardwareInfo) {
 
 pub fn print_audit_findings(findings: &[Finding], score: u32) {
     if findings.is_empty() {
-        println!(
-            "{}",
-            "  No issues found. System is well optimized.".green()
-        );
+        println!("{}", "  No issues found. System is well optimized.".green());
         return;
     }
 

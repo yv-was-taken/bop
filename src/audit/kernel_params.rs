@@ -67,16 +67,12 @@ pub fn check(hw: &HardwareInfo) -> Vec<Finding> {
             }
             Some(ref val) if val.parse::<u32>().unwrap_or(0) < 3 => {
                 findings.push(
-                    Finding::new(
-                        Severity::Low,
-                        "Kernel",
-                        "ABM level below recommended",
-                    )
-                    .current(format!("amdgpu.abmlevel={}", val))
-                    .recommended("amdgpu.abmlevel=3")
-                    .impact("Higher levels save more display power")
-                    .path("/proc/cmdline")
-                    .weight(3),
+                    Finding::new(Severity::Low, "Kernel", "ABM level below recommended")
+                        .current(format!("amdgpu.abmlevel={}", val))
+                        .recommended("amdgpu.abmlevel=3")
+                        .impact("Higher levels save more display power")
+                        .path("/proc/cmdline")
+                        .weight(3),
                 );
             }
             _ => {}
