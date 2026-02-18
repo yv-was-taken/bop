@@ -40,11 +40,15 @@ pub fn check(hw: &HardwareInfo) -> Vec<Finding> {
             }
             other => {
                 findings.push(
-                    Finding::new(Severity::Info, "CPU", format!("Unusual EPP value: {}", other))
-                        .current(other)
-                        .recommended("balance_power")
-                        .impact("Unknown")
-                        .weight(1),
+                    Finding::new(
+                        Severity::Info,
+                        "CPU",
+                        format!("Unusual EPP value: {}", other),
+                    )
+                    .current(other)
+                    .recommended("balance_power")
+                    .impact("Unknown")
+                    .weight(1),
                 );
             }
         }

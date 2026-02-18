@@ -18,7 +18,10 @@ const CONFLICTING_SERVICES: &[(&str, &str)] = &[
 
 /// Services to note but not recommend disabling.
 const NOTABLE_SERVICES: &[(&str, &str)] = &[
-    ("docker.service", "Docker daemon (~0.2W idle). Development tool -- not recommending disable."),
+    (
+        "docker.service",
+        "Docker daemon (~0.2W idle). Development tool -- not recommending disable.",
+    ),
     (
         "containerd.service",
         "Container runtime (~0.1W idle). Often needed for development.",
