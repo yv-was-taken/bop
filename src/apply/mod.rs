@@ -150,14 +150,14 @@ pub fn build_plan(hw: &HardwareInfo, sysfs: &SysfsRoot) -> ApplyPlan {
     }
 
     // Kernel params
-    if !hw.has_kernel_param("acpi.ec_no_wakeup") {
+    if hw.kernel_param_value("acpi.ec_no_wakeup").as_deref() != Some("1") {
         plan.kernel_params.push("acpi.ec_no_wakeup=1".to_string());
     }
-    if !hw.has_kernel_param("rtc_cmos.use_acpi_alarm") {
+    if hw.kernel_param_value("rtc_cmos.use_acpi_alarm").as_deref() != Some("1") {
         plan.kernel_params
             .push("rtc_cmos.use_acpi_alarm=1".to_string());
     }
-    if hw.gpu.is_amd() && !hw.has_kernel_param("amdgpu.abmlevel") {
+    if hw.gpu.is_amd() && hw.kernel_param_value("amdgpu.abmlevel").as_deref() != Some("3") {
         plan.kernel_params.push("amdgpu.abmlevel=3".to_string());
     }
 
@@ -212,7 +212,10 @@ pub fn execute_plan(plan: &ApplyPlan, hw: &HardwareInfo, dry_run: bool) -> Resul
     // Apply sysfs writes
     for write in &plan.sysfs_writes {
         let relative = write.path.strip_prefix('/').unwrap_or(&write.path);
-        let original = sysfs.read_optional(relative).unwrap_or(None).unwrap_or_default();
+        let original = sysfs
+            .read_optional(relative)
+            .unwrap_or(None)
+            .unwrap_or_default();
 
         if dry_run {
             println!(
@@ -319,7 +322,11 @@ pub fn print_plan(plan: &ApplyPlan) {
     if !plan.sysfs_writes.is_empty() {
         println!("  {} Runtime sysfs changes:", ">>".cyan());
         for write in &plan.sysfs_writes {
-            println!("     {} {}", write.description.dimmed(), write.path.dimmed());
+            println!(
+                "     {} {}",
+                write.description.dimmed(),
+                write.path.dimmed()
+            );
         }
         println!();
     }
