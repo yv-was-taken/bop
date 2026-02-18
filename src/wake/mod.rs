@@ -27,12 +27,14 @@ pub fn list() -> Result<()> {
             "disabled".dimmed().to_string()
         };
 
-        let addr = ctrl
-            .pci_address
-            .as_deref()
-            .unwrap_or("N/A");
+        let addr = ctrl.pci_address.as_deref().unwrap_or("N/A");
 
-        print!("  {:<5} {}  {}", ctrl.name.bold(), wake_badge, addr.dimmed());
+        print!(
+            "  {:<5} {}  {}",
+            ctrl.name.bold(),
+            wake_badge,
+            addr.dimmed()
+        );
 
         if ctrl.has_devices {
             print!("  {}", ctrl.device_descriptions.join(", "));
@@ -103,9 +105,9 @@ pub fn enable(controller: &str) -> Result<()> {
     }
 
     // Check current state
-    let is_enabled = wakeup.lines().any(|l| {
-        l.starts_with(controller) && l.contains("*enabled")
-    });
+    let is_enabled = wakeup
+        .lines()
+        .any(|l| l.starts_with(controller) && l.contains("*enabled"));
 
     if is_enabled {
         println!("{} is already enabled.", controller);
@@ -145,9 +147,9 @@ pub fn disable(controller: &str) -> Result<()> {
         )));
     }
 
-    let is_enabled = wakeup.lines().any(|l| {
-        l.starts_with(controller) && l.contains("*enabled")
-    });
+    let is_enabled = wakeup
+        .lines()
+        .any(|l| l.starts_with(controller) && l.contains("*enabled"));
 
     if !is_enabled {
         println!("{} is already disabled.", controller);

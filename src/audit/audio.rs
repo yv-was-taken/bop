@@ -10,16 +10,12 @@ pub fn check(sysfs: &SysfsRoot) -> Vec<Finding> {
         match val.as_str() {
             "0" => {
                 findings.push(
-                    Finding::new(
-                        Severity::Low,
-                        "Audio",
-                        "HDA Intel power save disabled",
-                    )
-                    .current("0 (disabled)")
-                    .recommended("1 (1 second timeout)")
-                    .impact("~0.1-0.3W savings when audio idle")
-                    .path(power_save_path)
-                    .weight(2),
+                    Finding::new(Severity::Low, "Audio", "HDA Intel power save disabled")
+                        .current("0 (disabled)")
+                        .recommended("1 (1 second timeout)")
+                        .impact("~0.1-0.3W savings when audio idle")
+                        .path(power_save_path)
+                        .weight(2),
                 );
             }
             "1" => {
@@ -48,16 +44,12 @@ pub fn check(sysfs: &SysfsRoot) -> Vec<Finding> {
     if let Some(val) = sysfs.read_optional(controller_path).unwrap_or(None) {
         if val == "N" {
             findings.push(
-                Finding::new(
-                    Severity::Low,
-                    "Audio",
-                    "HDA controller power save disabled",
-                )
-                .current("N (disabled)")
-                .recommended("Y (enabled)")
-                .impact("Controller stays powered when idle")
-                .path(controller_path)
-                .weight(2),
+                Finding::new(Severity::Low, "Audio", "HDA controller power save disabled")
+                    .current("N (disabled)")
+                    .recommended("Y (enabled)")
+                    .impact("Controller stays powered when idle")
+                    .path(controller_path)
+                    .weight(2),
             );
         }
     }

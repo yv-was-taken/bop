@@ -37,7 +37,10 @@ impl BatteryInfo {
         let base = format!("{}/{}", ps_base, bat_name);
 
         // Check type
-        if let Some(ptype) = sysfs.read_optional(format!("{}/type", base)).unwrap_or(None) {
+        if let Some(ptype) = sysfs
+            .read_optional(format!("{}/type", base))
+            .unwrap_or(None)
+        {
             if ptype != "Battery" {
                 return info;
             }
@@ -49,7 +52,9 @@ impl BatteryInfo {
             .as_deref()
             == Some("1");
 
-        info.status = sysfs.read_optional(format!("{}/status", base)).unwrap_or(None);
+        info.status = sysfs
+            .read_optional(format!("{}/status", base))
+            .unwrap_or(None);
         info.capacity_percent = sysfs
             .read_optional(format!("{}/capacity", base))
             .unwrap_or(None)
