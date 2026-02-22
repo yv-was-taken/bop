@@ -206,11 +206,10 @@ pub fn build_plan(hw: &HardwareInfo, sysfs: &SysfsRoot) -> ApplyPlan {
         }
     }
 
-    // ACPI wakeup sources to disable
+    // ACPI wakeup sources to disable:
+    // only USB/XHCI controllers on PCI, excluding the essential XHC0 controller.
     for source in &hw.platform.acpi_wakeup_sources {
-        if source.enabled && source.device != "XHC0" {
-            // Check if it has devices (keep enabled if so)
-            // For the plan, we'll mark it for disabling; the execution will double-check
+        if should_disable_acpi_wakeup_source(source, hw) {
             plan.acpi_wakeup_disable.push(source.device.clone());
         }
     }
@@ -349,6 +348,57 @@ fn is_wakeup_enabled(device: &str, sysfs: &SysfsRoot) -> bool {
         }
     }
     false
+}
+
+fn should_disable_acpi_wakeup_source(
+    source: &crate::detect::platform::AcpiWakeupSource,
+    hw: &HardwareInfo,
+) -> bool {
+    if !source.enabled || source.device == "XHC0" {
+        return false;
+    }
+
+    let Some(pci_address) = source
+        .sysfs_node
+        .as_deref()
+        .and_then(|node| node.strip_prefix("pci:"))
+    else {
+        return false;
+    };
+
+    if source.device.starts_with("XHC") {
+        return true;
+    }
+
+    hw.pci
+        .devices
+        .iter()
+        .find(|device| device.address == pci_address)
+        .is_some_and(is_usb_pci_device)
+}
+
+fn is_usb_pci_device(device: &crate::detect::pci::PciDevice) -> bool {
+    let class_is_usb_host_controller = device.class.as_deref().is_some_and(|class| {
+        let class = class.trim_start_matches("0x").to_ascii_lowercase();
+        let class = if class.len() >= 6 {
+            &class[..6]
+        } else {
+            class.as_str()
+        };
+
+        matches!(class, "0c0300" | "0c0310" | "0c0320" | "0c0330")
+    });
+    if class_is_usb_host_controller {
+        return true;
+    }
+
+    device.driver.as_deref().is_some_and(|driver| {
+        let driver = driver.to_ascii_lowercase();
+        driver.contains("xhci")
+            || driver.contains("ehci")
+            || driver.contains("ohci")
+            || driver.contains("uhci")
+    })
 }
 
 pub fn print_plan(plan: &ApplyPlan) {

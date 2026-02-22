@@ -1,3 +1,4 @@
+use bop::apply;
 use bop::audit;
 use bop::detect::HardwareInfo;
 use bop::profile;
@@ -108,11 +109,12 @@ fn create_framework16_fixture(root: &Path) {
     )
     .unwrap();
 
-    for (addr, control) in &[
-        ("0000:00:00.0", "on"),
-        ("0000:00:02.2", "on"),
-        ("0000:c1:00.3", "auto"),
-        ("0000:c1:00.4", "on"),
+    for (addr, control, class) in &[
+        ("0000:00:00.0", "on", "0x060000"),
+        ("0000:00:02.2", "on", "0x060400"),
+        ("0000:c1:00.3", "auto", "0x0c0330"),
+        ("0000:c1:00.4", "on", "0x0c0330"),
+        ("0000:c3:00.3", "auto", "0x0c0330"),
     ] {
         let dev = pci_base.join(addr);
         fs::create_dir_all(dev.join("power")).unwrap();
@@ -120,7 +122,7 @@ fn create_framework16_fixture(root: &Path) {
         fs::write(dev.join("power/runtime_status"), "active\n").unwrap();
         fs::write(dev.join("vendor"), "0x1022\n").unwrap();
         fs::write(dev.join("device"), "0x14e8\n").unwrap();
-        fs::write(dev.join("class"), "0x060000\n").unwrap();
+        fs::write(dev.join("class"), format!("{}\n", class)).unwrap();
     }
 
     // Network
@@ -142,6 +144,9 @@ XHC1\tS3\t*enabled\tpci:0000:c1:00.4
 XHC3\tS3\t*enabled\tpci:0000:c3:00.3
 GPP6\tS4\t*enabled\tpci:0000:00:02.2
 NHI0\tS4\t*enabled\tpci:0000:c3:00.5
+LID0\tS4\t*enabled\tplatform:PNP0C0D:00
+PBTN\tS4\t*enabled\tplatform:PNP0C0C:00
+SLPB\tS4\t*enabled\tplatform:PNP0C0E:00
 ";
     fs::write(root.join("proc/acpi/wakeup"), wakeup_content).unwrap();
 }
@@ -280,4 +285,43 @@ fn test_score_calculation() {
     ];
     let score = audit::calculate_score(&findings);
     assert_eq!(score, 50); // 10/20 = 50% penalty = score 50
+}
+
+#[test]
+fn test_apply_plan_only_disables_usb_wake_sources() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+    let plan = apply::build_plan(&hw, &sysfs);
+
+    assert!(plan.acpi_wakeup_disable.contains(&"XHC1".to_string()));
+    assert!(!plan.acpi_wakeup_disable.contains(&"XHC0".to_string()));
+    assert!(!plan.acpi_wakeup_disable.contains(&"GPP6".to_string()));
+    assert!(!plan.acpi_wakeup_disable.contains(&"NHI0".to_string()));
+    assert!(!plan.acpi_wakeup_disable.contains(&"LID0".to_string()));
+    assert!(!plan.acpi_wakeup_disable.contains(&"PBTN".to_string()));
+    assert!(!plan.acpi_wakeup_disable.contains(&"SLPB".to_string()));
+}
+
+#[test]
+fn test_apply_plan_does_not_disable_usb4_nhi_wake_source() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+
+    let nhi = tmp.path().join("sys/bus/pci/devices/0000:c3:00.5");
+    fs::create_dir_all(nhi.join("power")).unwrap();
+    fs::write(nhi.join("power/control"), "auto\n").unwrap();
+    fs::write(nhi.join("power/runtime_status"), "active\n").unwrap();
+    fs::write(nhi.join("vendor"), "0x8086\n").unwrap();
+    fs::write(nhi.join("device"), "0x0b26\n").unwrap();
+    fs::write(nhi.join("class"), "0x0c0340\n").unwrap();
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+    let plan = apply::build_plan(&hw, &sysfs);
+
+    assert!(plan.acpi_wakeup_disable.contains(&"XHC1".to_string()));
+    assert!(!plan.acpi_wakeup_disable.contains(&"NHI0".to_string()));
 }
