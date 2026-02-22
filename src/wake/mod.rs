@@ -12,6 +12,24 @@ pub struct WakeController {
     pub device_descriptions: Vec<String>,
 }
 
+/// Framework 16 USB host controllers use the XHC* naming convention in ACPI.
+/// Other ACPI wake sources (LID0, PBTN, GPP6, NHI0, etc.) are not USB
+/// controllers and should not be toggled by wake scan.
+fn is_usb_wakeup_source(name: &str) -> bool {
+    name.starts_with("XHC")
+}
+
+/// Whether scan should disable this controller's wake capability.
+/// XHC0 is exempt because it is the primary USB controller (keyboard/trackpad).
+fn should_disable_in_scan(ctrl: &WakeController) -> bool {
+    is_usb_wakeup_source(&ctrl.name) && !ctrl.has_devices && ctrl.enabled && ctrl.name != "XHC0"
+}
+
+/// Whether scan should enable this controller's wake capability.
+fn should_enable_in_scan(ctrl: &WakeController) -> bool {
+    is_usb_wakeup_source(&ctrl.name) && ctrl.has_devices && !ctrl.enabled
+}
+
 /// List all USB controllers and their wakeup status.
 pub fn list() -> Result<()> {
     let sysfs = SysfsRoot::system();
@@ -63,7 +81,7 @@ pub fn list() -> Result<()> {
     // Note about expansion cards
     let disabled_empty: Vec<_> = controllers
         .iter()
-        .filter(|c| !c.enabled && !c.has_devices && c.name.starts_with("XHC"))
+        .filter(|c| !c.enabled && !c.has_devices && is_usb_wakeup_source(&c.name))
         .collect();
     if !disabled_empty.is_empty() {
         let names: Vec<_> = disabled_empty.iter().map(|c| c.name.as_str()).collect();
@@ -184,14 +202,14 @@ pub fn scan() -> Result<()> {
     let mut changes = 0;
 
     for ctrl in &controllers {
-        if ctrl.has_devices && !ctrl.enabled {
+        if should_enable_in_scan(ctrl) {
             println!(
                 "  {} has connected devices, enabling wake...",
                 ctrl.name.bold()
             );
             sysfs_writer::toggle_acpi_wakeup(&ctrl.name)?;
             changes += 1;
-        } else if !ctrl.has_devices && ctrl.enabled && ctrl.name != "XHC0" {
+        } else if should_disable_in_scan(ctrl) {
             println!(
                 "  {} has no connected devices, disabling wake...",
                 ctrl.name.bold()
@@ -227,7 +245,7 @@ fn scan_controllers(sysfs: &SysfsRoot) -> Result<Vec<WakeController>> {
         let name = parts[0].to_string();
 
         // Only process USB host controllers (XHC*) and other notable sources
-        let is_usb_controller = name.starts_with("XHC");
+        let is_usb_controller = is_usb_wakeup_source(&name);
 
         let enabled = line.contains("*enabled");
 
@@ -308,4 +326,110 @@ fn find_usb_devices_for_controller(
 
     let has_devices = !descriptions.is_empty();
     (has_devices, descriptions)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::Path;
+    use tempfile::TempDir;
+
+    fn create_wakeup_fixture(root: &Path) {
+        fs::create_dir_all(root.join("proc/acpi")).unwrap();
+        fs::create_dir_all(root.join("sys/bus/usb/devices")).unwrap();
+
+        let wakeup_content = "\
+XHC0\tS3\t*enabled\tpci:0000:c1:00.3
+XHC1\tS3\t*enabled\tpci:0000:c1:00.4
+GPP6\tS4\t*enabled\tpci:0000:00:02.2
+NHI0\tS4\t*enabled\tpci:0000:c3:00.5
+LID0\tS4\t*enabled\tplatform:PNP0C0D:00
+PBTN\tS4\t*enabled\tplatform:PNP0C0C:00
+SLPB\tS3\t*enabled\tplatform:PNP0C0E:00
+";
+        fs::write(root.join("proc/acpi/wakeup"), wakeup_content).unwrap();
+    }
+
+    fn create_mixed_state_fixture(root: &Path) {
+        fs::create_dir_all(root.join("proc/acpi")).unwrap();
+        fs::create_dir_all(root.join("sys/bus/usb/devices")).unwrap();
+
+        // XHC2: disabled USB controller — should be enabled by scan since it has devices
+        // GPP6: disabled non-USB source — must NOT be enabled by scan
+        // PBTN: disabled non-USB source — must NOT be enabled by scan
+        let wakeup_content = "\
+XHC0\tS3\t*enabled\tpci:0000:c1:00.3
+XHC2\tS3\t*disabled\tpci:0000:c1:00.5
+GPP6\tS4\t*disabled\tpci:0000:00:02.2
+PBTN\tS4\t*disabled\tplatform:PNP0C0C:00
+";
+        fs::write(root.join("proc/acpi/wakeup"), wakeup_content).unwrap();
+
+        // Create a USB device on XHC2's bus so it has_devices = true
+        let pci_dir = root.join("sys/devices/pci0000:00/0000:c1:00.5/usb3");
+        fs::create_dir_all(&pci_dir).unwrap();
+        let usb_link = root.join("sys/bus/usb/devices/usb3");
+        std::os::unix::fs::symlink(&pci_dir, &usb_link).unwrap();
+
+        let child_dev = root.join("sys/devices/pci0000:00/0000:c1:00.5/usb3/3-1");
+        fs::create_dir_all(&child_dev).unwrap();
+        fs::write(child_dev.join("product"), "Test Device\n").unwrap();
+        let child_link = root.join("sys/bus/usb/devices/3-1");
+        std::os::unix::fs::symlink(&child_dev, &child_link).unwrap();
+    }
+
+    #[test]
+    fn scan_enable_filter_excludes_non_usb_wake_sources() {
+        let tmp = TempDir::new().unwrap();
+        create_mixed_state_fixture(tmp.path());
+
+        let sysfs = SysfsRoot::new(tmp.path());
+        let controllers = scan_controllers(&sysfs).unwrap();
+
+        let enable_candidates: Vec<&str> = controllers
+            .iter()
+            .filter(|c| should_enable_in_scan(c))
+            .map(|c| c.name.as_str())
+            .collect();
+
+        // Only XHC2 should be enabled (disabled USB controller with devices)
+        assert_eq!(enable_candidates, vec!["XHC2"]);
+
+        // Non-USB sources must not be enabled even though they are disabled
+        for source in ["GPP6", "PBTN"] {
+            let ctrl = controllers
+                .iter()
+                .find(|c| c.name == source)
+                .expect("fixture source should be present");
+            assert!(!ctrl.enabled);
+            assert!(!should_enable_in_scan(ctrl));
+        }
+    }
+
+    #[test]
+    fn scan_disable_filter_excludes_non_usb_wake_sources() {
+        let tmp = TempDir::new().unwrap();
+        create_wakeup_fixture(tmp.path());
+
+        let sysfs = SysfsRoot::new(tmp.path());
+        let controllers = scan_controllers(&sysfs).unwrap();
+
+        let disable_candidates: Vec<&str> = controllers
+            .iter()
+            .filter(|c| should_disable_in_scan(c))
+            .map(|c| c.name.as_str())
+            .collect();
+
+        assert_eq!(disable_candidates, vec!["XHC1"]);
+
+        for source in ["GPP6", "NHI0", "LID0", "PBTN", "SLPB"] {
+            let ctrl = controllers
+                .iter()
+                .find(|c| c.name == source)
+                .expect("fixture source should be present");
+            assert!(ctrl.enabled);
+            assert!(!should_disable_in_scan(ctrl));
+        }
+    }
 }

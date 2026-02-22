@@ -47,7 +47,10 @@ impl BatteryInfo {
         info.supply_name = Some(bat_name.clone());
         let base = format!("{}/{}", ps_base, bat_name);
 
-        if let Some(ptype) = sysfs.read_optional(format!("{}/type", base)).unwrap_or(None) {
+        if let Some(ptype) = sysfs
+            .read_optional(format!("{}/type", base))
+            .unwrap_or(None)
+        {
             if ptype != "Battery" {
                 return info;
             }
