@@ -14,16 +14,12 @@ pub fn check(hw: &HardwareInfo) -> Vec<Finding> {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 if stdout.contains("off") {
                     findings.push(
-                        Finding::new(
-                            Severity::Medium,
-                            "Network",
-                            "WiFi power save disabled",
-                        )
-                        .current("off")
-                        .recommended("on")
-                        .impact("~0.5W savings")
-                        .path(format!("iw dev {} set power_save on", iface))
-                        .weight(5),
+                        Finding::new(Severity::Medium, "Network", "WiFi power save disabled")
+                            .current("off")
+                            .recommended("on")
+                            .impact("~0.5W savings")
+                            .path(format!("iw dev {} set power_save on", iface))
+                            .weight(5),
                     );
                 }
                 // "on" is optimal -- no finding

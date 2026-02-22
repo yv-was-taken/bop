@@ -23,9 +23,7 @@ pub struct HardwareInfo {
 
 impl HardwareInfo {
     pub fn detect(sysfs: &SysfsRoot) -> Self {
-        let kernel_cmdline = sysfs
-            .read("proc/cmdline")
-            .unwrap_or_default();
+        let kernel_cmdline = sysfs.read("proc/cmdline").unwrap_or_default();
 
         Self {
             dmi: dmi::DmiInfo::detect(sysfs),

@@ -36,10 +36,7 @@ pub fn enable_service(service: &str) -> Result<()> {
         .map_err(|e| Error::Other(format!("failed to enable {}: {}", service, e)))?;
 
     if !status.success() {
-        return Err(Error::Other(format!(
-            "systemctl enable {} failed",
-            service
-        )));
+        return Err(Error::Other(format!("systemctl enable {} failed", service)));
     }
 
     Ok(())
