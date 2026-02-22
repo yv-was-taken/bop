@@ -49,15 +49,29 @@ pub fn revert() -> Result<()> {
 }
 
 fn revert_loaded_state(state: &ApplyState) -> Result<bool> {
-    let all_succeeded = revert_steps(state);
-    if all_succeeded {
+    let remaining = revert_steps(state);
+    if has_pending_reverts(&remaining) {
+        remaining.save()?;
+        Ok(false)
+    } else {
         ApplyState::remove_file()?;
+        Ok(true)
     }
-    Ok(all_succeeded)
 }
 
-fn revert_steps(state: &ApplyState) -> bool {
-    let mut all_succeeded = true;
+fn has_pending_reverts(state: &ApplyState) -> bool {
+    !state.sysfs_changes.is_empty()
+        || !state.acpi_wakeup_toggled.is_empty()
+        || !state.kernel_params_added.is_empty()
+        || !state.services_disabled.is_empty()
+        || !state.systemd_units_created.is_empty()
+}
+
+fn revert_steps(state: &ApplyState) -> ApplyState {
+    let mut remaining = ApplyState {
+        timestamp: state.timestamp.clone(),
+        ..Default::default()
+    };
 
     // Revert sysfs changes
     if !state.sysfs_changes.is_empty() {
@@ -79,7 +93,7 @@ fn revert_steps(state: &ApplyState) -> bool {
                         change.path,
                         e
                     );
-                    all_succeeded = false;
+                    remaining.sysfs_changes.push(change.clone());
                 }
             }
         }
@@ -94,7 +108,7 @@ fn revert_steps(state: &ApplyState) -> bool {
                 Ok(()) => println!("     {} {}", "enabled".green(), device),
                 Err(e) => {
                     eprintln!("     {} Failed to toggle {}: {}", "!".red(), device, e);
-                    all_succeeded = false;
+                    remaining.acpi_wakeup_toggled.push(device.clone());
                 }
             }
         }
@@ -111,7 +125,7 @@ fn revert_steps(state: &ApplyState) -> bool {
             Ok(()) => println!("     {}", "(will take effect after reboot)".dimmed()),
             Err(e) => {
                 eprintln!("     {} Failed: {}", "!".red(), e);
-                all_succeeded = false;
+                remaining.kernel_params_added = state.kernel_params_added.clone();
             }
         }
         println!();
@@ -125,7 +139,7 @@ fn revert_steps(state: &ApplyState) -> bool {
                 Ok(()) => println!("     {} {}", "enabled".green(), svc),
                 Err(e) => {
                     eprintln!("     {} Failed to enable {}: {}", "!".red(), svc, e);
-                    all_succeeded = false;
+                    remaining.services_disabled.push(svc.clone());
                 }
             }
         }
@@ -143,19 +157,19 @@ fn revert_steps(state: &ApplyState) -> bool {
             }
             Err(e) => {
                 eprintln!("     {} Failed: {}", "!".red(), e);
-                all_succeeded = false;
+                remaining.systemd_units_created = state.systemd_units_created.clone();
             }
         }
         println!();
     }
 
-    all_succeeded
+    remaining
 }
 
 #[cfg(test)]
 mod tests {
     use super::revert_loaded_state;
-    use crate::apply::{ApplyState, SysfsChange};
+    use crate::apply::{ApplyState, SysfsChange, sysfs_writer};
     use std::fs;
     use std::path::PathBuf;
     use std::sync::{LazyLock, Mutex};
@@ -176,6 +190,19 @@ mod tests {
         StateFileOverrideGuard
     }
 
+    struct AcpiWakeupPathOverrideGuard;
+
+    impl Drop for AcpiWakeupPathOverrideGuard {
+        fn drop(&mut self) {
+            sysfs_writer::set_acpi_wakeup_path_override_for_tests(None);
+        }
+    }
+
+    fn set_acpi_wakeup_path_override(path: PathBuf) -> AcpiWakeupPathOverrideGuard {
+        sysfs_writer::set_acpi_wakeup_path_override_for_tests(Some(path));
+        AcpiWakeupPathOverrideGuard
+    }
+
     #[test]
     fn test_revert_keeps_state_when_a_restore_step_fails() {
         let _test_guard = TEST_LOCK.lock().expect("test lock poisoned");
@@ -188,6 +215,7 @@ mod tests {
 
         let missing_parent = tmp.path().join("missing");
         let failing_path = missing_parent.join("restore-fail");
+        let failing_path_str = failing_path.to_string_lossy().into_owned();
 
         let state = ApplyState {
             timestamp: "2026-02-18T00:00:00Z".to_string(),
@@ -198,7 +226,7 @@ mod tests {
                     new_value: "new-value".to_string(),
                 },
                 SysfsChange {
-                    path: failing_path.to_string_lossy().into_owned(),
+                    path: failing_path_str.clone(),
                     original_value: "old-fail".to_string(),
                     new_value: "new-fail".to_string(),
                 },
@@ -218,9 +246,79 @@ mod tests {
             state_path.exists(),
             "state file must be preserved when revert is partial"
         );
+        let remaining = ApplyState::load()
+            .expect("failed to load persisted partial state")
+            .expect("persisted partial state should exist");
+        assert_eq!(
+            remaining.sysfs_changes.len(),
+            1,
+            "only failed sysfs entries should remain for retry"
+        );
+        assert_eq!(
+            remaining.sysfs_changes[0].path, failing_path_str,
+            "partial state should only retain the failed path"
+        );
         assert_eq!(
             fs::read_to_string(&ok_path).expect("failed to read restored file"),
             "old-value"
+        );
+    }
+
+    #[test]
+    fn test_revert_does_not_retry_successful_acpi_toggles_after_partial_failure() {
+        let _test_guard = TEST_LOCK.lock().expect("test lock poisoned");
+        let tmp = TempDir::new().expect("failed to create temp dir");
+        let state_path = tmp.path().join("state.json");
+        let _state_override = set_state_file_override(state_path.clone());
+
+        let acpi_wakeup_path = tmp.path().join("acpi-wakeup");
+        let _acpi_override = set_acpi_wakeup_path_override(acpi_wakeup_path.clone());
+        fs::write(&acpi_wakeup_path, "").expect("failed to seed acpi wakeup mock");
+
+        let missing_parent = tmp.path().join("missing");
+        let failing_path = missing_parent.join("restore-fail");
+        let failing_path_str = failing_path.to_string_lossy().into_owned();
+
+        let state = ApplyState {
+            timestamp: "2026-02-18T00:00:00Z".to_string(),
+            sysfs_changes: vec![SysfsChange {
+                path: failing_path_str.clone(),
+                original_value: "old-fail".to_string(),
+                new_value: "new-fail".to_string(),
+            }],
+            acpi_wakeup_toggled: vec!["XHC0".to_string()],
+            ..Default::default()
+        };
+
+        state.save().expect("failed to save state");
+        assert!(state_path.exists(), "state file should be created");
+
+        let all_succeeded = revert_loaded_state(&state).expect("revert execution failed");
+        assert!(
+            !all_succeeded,
+            "revert should report partial failure when any restore step fails"
+        );
+
+        let remaining = ApplyState::load()
+            .expect("failed to load persisted partial state")
+            .expect("persisted partial state should exist");
+        assert!(
+            remaining.acpi_wakeup_toggled.is_empty(),
+            "successful ACPI toggles must be removed to avoid re-toggling on retry"
+        );
+        assert_eq!(
+            remaining.sysfs_changes.len(),
+            1,
+            "failed sysfs restore should remain for retry"
+        );
+        assert_eq!(
+            remaining.sysfs_changes[0].path, failing_path_str,
+            "the failed sysfs path should stay in persisted state"
+        );
+        assert_eq!(
+            fs::read_to_string(&acpi_wakeup_path).expect("failed to read acpi wakeup mock"),
+            "XHC0",
+            "ACPI wakeup toggle should run once and not be retained in state"
         );
     }
 
