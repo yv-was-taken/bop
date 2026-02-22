@@ -28,7 +28,7 @@ pub fn revert() -> Result<()> {
 
     if all_succeeded {
         println!("{}", "Revert complete.".green().bold());
-        if !state.kernel_params_added.is_empty() {
+        if !state.kernel_param_backups.is_empty() || !state.kernel_params_added.is_empty() {
             println!(
                 "{}",
                 "  Note: Kernel parameter changes require a reboot to take effect.".yellow()
@@ -115,8 +115,19 @@ fn revert_steps(state: &ApplyState) -> ApplyState {
         println!();
     }
 
-    // Remove kernel params
-    if !state.kernel_params_added.is_empty() {
+    // Restore kernel params
+    if !state.kernel_param_backups.is_empty() {
+        println!("  {} Restoring kernel parameter boot entries:", ">>".cyan());
+        for backup in &state.kernel_param_backups {
+            println!("     {}", backup.path);
+        }
+        match apply::kernel_params::restore_kernel_param_backups(&state.kernel_param_backups) {
+            Ok(()) => println!("     {}", "(will take effect after reboot)".dimmed()),
+            Err(e) => eprintln!("     {} Failed: {}", "!".red(), e),
+        }
+        println!();
+    } else if !state.kernel_params_added.is_empty() {
+        // Backward compatibility for state files created before backup support.
         println!("  {} Removing kernel parameters:", ">>".cyan());
         for param in &state.kernel_params_added {
             println!("     {}", param);

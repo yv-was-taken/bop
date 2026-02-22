@@ -209,6 +209,60 @@ fn test_kernel_param_detection() {
 }
 
 #[test]
+fn test_build_plan_updates_wrong_kernel_param_values() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+
+    fs::write(
+        tmp.path().join("proc/cmdline"),
+        "initrd=\\initramfs-linux.img root=UUID=abc123 rw acpi.ec_no_wakeup=0 rtc_cmos.use_acpi_alarm=0 amdgpu.abmlevel=1\n",
+    )
+    .unwrap();
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+    let plan = apply::build_plan(&hw, &sysfs);
+
+    assert!(
+        plan.kernel_params
+            .contains(&"acpi.ec_no_wakeup=1".to_string())
+    );
+    assert!(
+        plan.kernel_params
+            .contains(&"rtc_cmos.use_acpi_alarm=1".to_string())
+    );
+    assert!(
+        plan.kernel_params
+            .contains(&"amdgpu.abmlevel=3".to_string())
+    );
+}
+
+#[test]
+fn test_build_plan_skips_abmlevel_at_or_above_3() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+
+    // abmlevel=4 is above the threshold — apply should leave it alone (matching audit)
+    fs::write(
+        tmp.path().join("proc/cmdline"),
+        "root=UUID=abc rw acpi.ec_no_wakeup=1 rtc_cmos.use_acpi_alarm=1 amdgpu.abmlevel=4\n",
+    )
+    .unwrap();
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+    let plan = apply::build_plan(&hw, &sysfs);
+
+    assert!(
+        !plan
+            .kernel_params
+            .iter()
+            .any(|p| p.starts_with("amdgpu.abmlevel")),
+        "apply should not touch abmlevel when it is already >= 3"
+    );
+}
+
+#[test]
 fn test_battery_info() {
     let tmp = TempDir::new().unwrap();
     create_framework16_fixture(tmp.path());
