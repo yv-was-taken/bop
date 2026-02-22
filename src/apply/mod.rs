@@ -212,7 +212,10 @@ pub fn execute_plan(plan: &ApplyPlan, hw: &HardwareInfo, dry_run: bool) -> Resul
     // Apply sysfs writes
     for write in &plan.sysfs_writes {
         let relative = write.path.strip_prefix('/').unwrap_or(&write.path);
-        let original = sysfs.read_optional(relative).unwrap_or(None).unwrap_or_default();
+        let original = sysfs
+            .read_optional(relative)
+            .unwrap_or(None)
+            .unwrap_or_default();
 
         if dry_run {
             println!(
@@ -319,7 +322,11 @@ pub fn print_plan(plan: &ApplyPlan) {
     if !plan.sysfs_writes.is_empty() {
         println!("  {} Runtime sysfs changes:", ">>".cyan());
         for write in &plan.sysfs_writes {
-            println!("     {} {}", write.description.dimmed(), write.path.dimmed());
+            println!(
+                "     {} {}",
+                write.description.dimmed(),
+                write.path.dimmed()
+            );
         }
         println!();
     }

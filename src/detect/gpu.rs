@@ -79,7 +79,6 @@ impl GpuInfo {
     }
 
     pub fn is_amd(&self) -> bool {
-        self.vendor.as_deref() == Some("0x1002")
-            || self.driver.as_deref() == Some("amdgpu")
+        self.vendor.as_deref() == Some("0x1002") || self.driver.as_deref() == Some("amdgpu")
     }
 }

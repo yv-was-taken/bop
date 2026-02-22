@@ -12,11 +12,21 @@ pub struct DmiInfo {
 impl DmiInfo {
     pub fn detect(sysfs: &SysfsRoot) -> Self {
         Self {
-            board_vendor: sysfs.read_optional("sys/class/dmi/id/board_vendor").unwrap_or(None),
-            board_name: sysfs.read_optional("sys/class/dmi/id/board_name").unwrap_or(None),
-            product_name: sysfs.read_optional("sys/class/dmi/id/product_name").unwrap_or(None),
-            product_family: sysfs.read_optional("sys/class/dmi/id/product_family").unwrap_or(None),
-            bios_version: sysfs.read_optional("sys/class/dmi/id/bios_version").unwrap_or(None),
+            board_vendor: sysfs
+                .read_optional("sys/class/dmi/id/board_vendor")
+                .unwrap_or(None),
+            board_name: sysfs
+                .read_optional("sys/class/dmi/id/board_name")
+                .unwrap_or(None),
+            product_name: sysfs
+                .read_optional("sys/class/dmi/id/product_name")
+                .unwrap_or(None),
+            product_family: sysfs
+                .read_optional("sys/class/dmi/id/product_family")
+                .unwrap_or(None),
+            bios_version: sysfs
+                .read_optional("sys/class/dmi/id/bios_version")
+                .unwrap_or(None),
         }
     }
 
@@ -32,9 +42,6 @@ impl DmiInfo {
                 .product_name
                 .as_deref()
                 .is_some_and(|n| n.contains("16"))
-                || self
-                    .board_name
-                    .as_deref()
-                    .is_some_and(|n| n.contains("16")))
+                || self.board_name.as_deref().is_some_and(|n| n.contains("16")))
     }
 }
