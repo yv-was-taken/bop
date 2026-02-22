@@ -303,3 +303,24 @@ fn test_apply_plan_only_disables_usb_wake_sources() {
     assert!(!plan.acpi_wakeup_disable.contains(&"PBTN".to_string()));
     assert!(!plan.acpi_wakeup_disable.contains(&"SLPB".to_string()));
 }
+
+#[test]
+fn test_apply_plan_does_not_disable_usb4_nhi_wake_source() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+
+    let nhi = tmp.path().join("sys/bus/pci/devices/0000:c3:00.5");
+    fs::create_dir_all(nhi.join("power")).unwrap();
+    fs::write(nhi.join("power/control"), "auto\n").unwrap();
+    fs::write(nhi.join("power/runtime_status"), "active\n").unwrap();
+    fs::write(nhi.join("vendor"), "0x8086\n").unwrap();
+    fs::write(nhi.join("device"), "0x0b26\n").unwrap();
+    fs::write(nhi.join("class"), "0x0c0340\n").unwrap();
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+    let plan = apply::build_plan(&hw, &sysfs);
+
+    assert!(plan.acpi_wakeup_disable.contains(&"XHC1".to_string()));
+    assert!(!plan.acpi_wakeup_disable.contains(&"NHI0".to_string()));
+}

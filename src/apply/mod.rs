@@ -340,13 +340,17 @@ fn should_disable_acpi_wakeup_source(
 }
 
 fn is_usb_pci_device(device: &crate::detect::pci::PciDevice) -> bool {
-    let class_is_usb = device.class.as_deref().is_some_and(|class| {
-        class
-            .trim_start_matches("0x")
-            .to_ascii_lowercase()
-            .starts_with("0c03")
+    let class_is_usb_host_controller = device.class.as_deref().is_some_and(|class| {
+        let class = class.trim_start_matches("0x").to_ascii_lowercase();
+        let class = if class.len() >= 6 {
+            &class[..6]
+        } else {
+            class.as_str()
+        };
+
+        matches!(class, "0c0300" | "0c0310" | "0c0320" | "0c0330")
     });
-    if class_is_usb {
+    if class_is_usb_host_controller {
         return true;
     }
 
