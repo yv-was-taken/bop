@@ -114,6 +114,7 @@ fn create_framework16_fixture(root: &Path) {
         ("0000:00:02.2", "on", "0x060400"),
         ("0000:c1:00.3", "auto", "0x0c0330"),
         ("0000:c1:00.4", "on", "0x0c0330"),
+        ("0000:c3:00.3", "auto", "0x0c0330"),
     ] {
         let dev = pci_base.join(addr);
         fs::create_dir_all(dev.join("power")).unwrap();
