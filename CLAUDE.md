@@ -5,17 +5,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Test Commands
 
 ```bash
-cargo build                    # Build
+cargo check                    # Fast compile validation during development
+cargo build                    # Build debug binary
+cargo build --release          # Build optimized binary at target/release/bop
 cargo test                     # Run all tests (unit + integration)
 cargo test test_name           # Run a single test by name
 cargo test --test sysfs_mock   # Run only integration tests
+cargo clippy --all-targets --all-features -- -D warnings  # Lint (treat warnings as errors)
+cargo fmt --all                # Format
 cargo run -- audit             # Run audit on current system
 cargo run -- audit --json      # JSON output
 cargo run -- apply --dry-run   # Preview changes without applying
 cargo run -- wake list         # List ACPI wakeup controllers
+cargo install --path .         # Install locally for end-to-end testing
 ```
-
-No linter or formatter config is set up yet — use `cargo clippy` and `cargo fmt`.
 
 ## Architecture
 
@@ -50,11 +53,18 @@ let hw = HardwareInfo::detect(&sysfs);   // Works against mock data
 
 This enables testing detection, profile matching, audit checks, and scoring without root access or real hardware. When adding new audit checks or detection modules, extend the fixture and add corresponding test assertions.
 
+## Volatile vs Persistent Changes
+
+- **Volatile** (runtime, reset on reboot): EPP, platform profile, ASPM policy, PCI runtime PM, WiFi power save, ACPI wakeup toggles
+- **Boot-persistent** (require reboot): Kernel params added to systemd-boot entries
+- **Persistence bridge**: `bop-powersave.service` (generated systemd oneshot) re-applies volatile sysfs settings and ACPI wakeup config at every boot
+
 ## Git Workflow
 
 - **Never merge PRs or push directly to master** unless the user explicitly says to merge. Always create PRs for review.
 - When creating PRs, sort by code significance: correctness bugs first, then data-loss bugs, then behavioral fixes.
 - Use `git worktree` for parallel fix branches. Worktrees live at `/home/ywvlfy/Projects/bop/<branch-name>/`.
+- Commit subjects: descriptive, imperative, scoped when possible (e.g., `audit: flag disabled wifi powersave`).
 
 ## Key Details
 
