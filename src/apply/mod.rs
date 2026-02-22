@@ -45,6 +45,8 @@ pub struct ApplyState {
     pub timestamp: String,
     pub sysfs_changes: Vec<SysfsChange>,
     pub kernel_params_added: Vec<String>,
+    #[serde(default)]
+    pub kernel_param_backups: Vec<kernel_params::KernelParamBackup>,
     pub services_disabled: Vec<String>,
     pub systemd_units_created: Vec<String>,
     pub modprobe_files_created: Vec<String>,
@@ -197,14 +199,19 @@ pub fn build_plan(hw: &HardwareInfo, sysfs: &SysfsRoot) -> ApplyPlan {
     }
 
     // Kernel params
-    if !hw.has_kernel_param("acpi.ec_no_wakeup") {
+    if hw.kernel_param_value("acpi.ec_no_wakeup").as_deref() != Some("1") {
         plan.kernel_params.push("acpi.ec_no_wakeup=1".to_string());
     }
-    if !hw.has_kernel_param("rtc_cmos.use_acpi_alarm") {
+    if hw.kernel_param_value("rtc_cmos.use_acpi_alarm").as_deref() != Some("1") {
         plan.kernel_params
             .push("rtc_cmos.use_acpi_alarm=1".to_string());
     }
-    if hw.gpu.is_amd() && !hw.has_kernel_param("amdgpu.abmlevel") {
+    if hw.gpu.is_amd()
+        && hw
+            .kernel_param_value("amdgpu.abmlevel")
+            .and_then(|v| v.parse::<u32>().ok())
+            .map_or(true, |v| v < 3)
+    {
         plan.kernel_params.push("amdgpu.abmlevel=3".to_string());
     }
 
@@ -240,7 +247,7 @@ fn is_service_active_or_enabled(service: &str) -> bool {
 trait ApplyOps {
     fn write_sysfs(&mut self, path: &str, value: &str) -> Result<()>;
     fn toggle_acpi_wakeup(&mut self, device: &str) -> Result<()>;
-    fn add_kernel_params(&mut self, params: &[String]) -> Result<()>;
+    fn add_kernel_params(&mut self, params: &[String]) -> Result<Vec<kernel_params::KernelParamBackup>>;
     fn disable_service(&mut self, service: &str) -> Result<()>;
     fn generate_service(&mut self, hw: &HardwareInfo, plan: &ApplyPlan) -> Result<PathBuf>;
     fn enable_systemd_service(&mut self) -> Result<()>;
@@ -258,7 +265,7 @@ impl ApplyOps for RealApplyOps {
         sysfs_writer::toggle_acpi_wakeup(device)
     }
 
-    fn add_kernel_params(&mut self, params: &[String]) -> Result<()> {
+    fn add_kernel_params(&mut self, params: &[String]) -> Result<Vec<kernel_params::KernelParamBackup>> {
         kernel_params::add_kernel_params(params)
     }
 
@@ -346,8 +353,14 @@ fn execute_plan_with_ops(
                 plan.kernel_params.join(" ")
             );
         } else {
-            ops.add_kernel_params(&plan.kernel_params)?;
-            state.kernel_params_added = plan.kernel_params.clone();
+            let backups = ops.add_kernel_params(&plan.kernel_params)?;
+            let previous_state = ApplyState::load().unwrap_or(None);
+            merge_kernel_param_state(
+                &mut state,
+                &plan.kernel_params,
+                backups,
+                previous_state.as_ref(),
+            );
         }
     }
     persist_state_checkpoint(ops, &state, dry_run)?;
@@ -394,6 +407,32 @@ pub fn execute_plan(plan: &ApplyPlan, hw: &HardwareInfo, dry_run: bool) -> Resul
 
     let mut ops = RealApplyOps;
     execute_plan_with_ops(plan, hw, dry_run, &mut ops)
+}
+
+fn merge_kernel_param_state(
+    state: &mut ApplyState,
+    planned_params: &[String],
+    new_backups: Vec<kernel_params::KernelParamBackup>,
+    previous_state: Option<&ApplyState>,
+) {
+    state.kernel_params_added = planned_params.to_vec();
+
+    // Start from previous backups, then overlay new ones keyed by path.
+    // New backups replace previous entries for the same file, but previous
+    // entries for files not touched this run are preserved.
+    let mut merged: std::collections::HashMap<&str, &kernel_params::KernelParamBackup> =
+        std::collections::HashMap::new();
+
+    if let Some(prev) = previous_state {
+        for backup in &prev.kernel_param_backups {
+            merged.insert(&backup.path, backup);
+        }
+    }
+    for backup in &new_backups {
+        merged.insert(&backup.path, backup);
+    }
+
+    state.kernel_param_backups = merged.into_values().cloned().collect();
 }
 
 fn check_conflicts() -> Result<()> {
@@ -563,11 +602,11 @@ mod tests {
             Ok(())
         }
 
-        fn add_kernel_params(&mut self, _params: &[String]) -> Result<()> {
+        fn add_kernel_params(&mut self, _params: &[String]) -> Result<Vec<kernel_params::KernelParamBackup>> {
             if self.fail_add_kernel_params {
                 return Err(Error::Other("injected kernel params failure".to_string()));
             }
-            Ok(())
+            Ok(Vec::new())
         }
 
         fn disable_service(&mut self, _service: &str) -> Result<()> {
@@ -734,5 +773,111 @@ mod tests {
             previous_state.sysfs_changes[0].new_value
         );
         assert!(persisted.kernel_params_added.is_empty());
+    }
+
+    #[test]
+    fn test_merge_kernel_param_state_uses_new_backups_when_present() {
+        let mut state = ApplyState::default();
+        let planned = vec!["acpi.ec_no_wakeup=1".to_string()];
+        let backups = vec![kernel_params::KernelParamBackup {
+            path: "/boot/loader/entries/test.conf".to_string(),
+            original_content: "options quiet acpi.ec_no_wakeup=0\n".to_string(),
+        }];
+
+        merge_kernel_param_state(&mut state, &planned, backups.clone(), None);
+
+        assert_eq!(state.kernel_params_added, planned);
+        assert_eq!(state.kernel_param_backups, backups);
+    }
+
+    #[test]
+    fn test_merge_kernel_param_state_preserves_previous_when_no_new_backups() {
+        let mut state = ApplyState::default();
+        let planned = vec!["acpi.ec_no_wakeup=1".to_string()];
+        let previous = ApplyState {
+            kernel_params_added: vec!["acpi.ec_no_wakeup=1".to_string()],
+            kernel_param_backups: vec![kernel_params::KernelParamBackup {
+                path: "/boot/loader/entries/test.conf".to_string(),
+                original_content: "options quiet acpi.ec_no_wakeup=0\n".to_string(),
+            }],
+            ..Default::default()
+        };
+
+        merge_kernel_param_state(&mut state, &planned, Vec::new(), Some(&previous));
+
+        assert_eq!(state.kernel_params_added, previous.kernel_params_added);
+        assert_eq!(state.kernel_param_backups, previous.kernel_param_backups);
+    }
+
+    #[test]
+    fn test_merge_kernel_param_state_empty_when_no_backups_and_no_previous() {
+        let mut state = ApplyState::default();
+        let planned = vec!["acpi.ec_no_wakeup=1".to_string()];
+
+        merge_kernel_param_state(&mut state, &planned, Vec::new(), None);
+
+        assert_eq!(state.kernel_params_added, planned);
+        assert!(state.kernel_param_backups.is_empty());
+    }
+
+    #[test]
+    fn test_merge_kernel_param_state_merges_new_and_previous_backups() {
+        let mut state = ApplyState::default();
+        let planned = vec![
+            "acpi.ec_no_wakeup=1".to_string(),
+            "rtc_cmos.use_acpi_alarm=1".to_string(),
+        ];
+        let prev_backup = kernel_params::KernelParamBackup {
+            path: "/boot/loader/entries/old.conf".to_string(),
+            original_content: "options quiet acpi.ec_no_wakeup=0\n".to_string(),
+        };
+        let new_backup = kernel_params::KernelParamBackup {
+            path: "/boot/loader/entries/new.conf".to_string(),
+            original_content: "options quiet rtc_cmos.use_acpi_alarm=0\n".to_string(),
+        };
+        let previous = ApplyState {
+            kernel_param_backups: vec![prev_backup.clone()],
+            ..Default::default()
+        };
+
+        merge_kernel_param_state(
+            &mut state,
+            &planned,
+            vec![new_backup.clone()],
+            Some(&previous),
+        );
+
+        assert_eq!(state.kernel_params_added, planned);
+        assert_eq!(state.kernel_param_backups.len(), 2);
+        assert!(state.kernel_param_backups.contains(&prev_backup));
+        assert!(state.kernel_param_backups.contains(&new_backup));
+    }
+
+    #[test]
+    fn test_merge_kernel_param_state_new_backup_overwrites_same_path() {
+        let mut state = ApplyState::default();
+        let planned = vec!["acpi.ec_no_wakeup=1".to_string()];
+        let prev_backup = kernel_params::KernelParamBackup {
+            path: "/boot/loader/entries/linux.conf".to_string(),
+            original_content: "options quiet\n".to_string(),
+        };
+        let new_backup = kernel_params::KernelParamBackup {
+            path: "/boot/loader/entries/linux.conf".to_string(),
+            original_content: "options quiet acpi.ec_no_wakeup=0\n".to_string(),
+        };
+        let previous = ApplyState {
+            kernel_param_backups: vec![prev_backup],
+            ..Default::default()
+        };
+
+        merge_kernel_param_state(
+            &mut state,
+            &planned,
+            vec![new_backup.clone()],
+            Some(&previous),
+        );
+
+        assert_eq!(state.kernel_param_backups.len(), 1);
+        assert_eq!(state.kernel_param_backups[0], new_backup);
     }
 }
