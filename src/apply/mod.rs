@@ -59,6 +59,15 @@ pub struct SysfsChange {
 }
 
 impl ApplyState {
+    fn has_recorded_changes(&self) -> bool {
+        !self.sysfs_changes.is_empty()
+            || !self.kernel_params_added.is_empty()
+            || !self.services_disabled.is_empty()
+            || !self.systemd_units_created.is_empty()
+            || !self.modprobe_files_created.is_empty()
+            || !self.acpi_wakeup_toggled.is_empty()
+    }
+
     pub(crate) fn file_path() -> PathBuf {
         state_file_path()
     }
@@ -275,7 +284,7 @@ fn persist_state_checkpoint(
     state: &ApplyState,
     dry_run: bool,
 ) -> Result<()> {
-    if !dry_run {
+    if !dry_run && state.has_recorded_changes() {
         ops.save_state(state)?;
     }
     Ok(())
@@ -524,6 +533,7 @@ mod tests {
 
     struct TestApplyOps {
         state_path: PathBuf,
+        fail_add_kernel_params: bool,
         fail_generate_service: bool,
         fail_enable_service: bool,
         checkpoint_count: usize,
@@ -533,6 +543,7 @@ mod tests {
         fn new(state_path: PathBuf) -> Self {
             Self {
                 state_path,
+                fail_add_kernel_params: false,
                 fail_generate_service: false,
                 fail_enable_service: false,
                 checkpoint_count: 0,
@@ -553,6 +564,9 @@ mod tests {
         }
 
         fn add_kernel_params(&mut self, _params: &[String]) -> Result<()> {
+            if self.fail_add_kernel_params {
+                return Err(Error::Other("injected kernel params failure".to_string()));
+            }
             Ok(())
         }
 
@@ -664,5 +678,61 @@ mod tests {
             vec!["/etc/systemd/system/bop-powersave.service".to_string()]
         );
         assert_eq!(ops.checkpoint_count, 4);
+    }
+
+    #[test]
+    fn test_execute_plan_preserves_existing_state_when_failure_happens_before_first_change() {
+        let tmp = TempDir::new().unwrap();
+        let state_path = tmp.path().join("state.json");
+
+        let previous_state = ApplyState {
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            sysfs_changes: vec![SysfsChange {
+                path: "/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference"
+                    .to_string(),
+                original_value: "performance".to_string(),
+                new_value: "balance_power".to_string(),
+            }],
+            ..Default::default()
+        };
+        std::fs::write(
+            &state_path,
+            serde_json::to_string_pretty(&previous_state).unwrap(),
+        )
+        .unwrap();
+
+        let hw = minimal_hw();
+        let plan = ApplyPlan {
+            sysfs_writes: Vec::new(),
+            kernel_params: vec!["acpi.ec_no_wakeup=1".to_string()],
+            services_to_disable: Vec::new(),
+            acpi_wakeup_disable: Vec::new(),
+            systemd_service: false,
+            modprobe_configs: Vec::new(),
+        };
+
+        let mut ops = TestApplyOps::new(state_path.clone());
+        ops.fail_add_kernel_params = true;
+
+        let result = execute_plan_with_ops(&plan, &hw, false, &mut ops);
+        assert!(result.is_err());
+        assert_eq!(ops.checkpoint_count, 0);
+
+        let persisted = read_state(&state_path);
+        assert_eq!(persisted.timestamp, previous_state.timestamp);
+        assert_eq!(persisted.sysfs_changes.len(), 1);
+        assert_eq!(
+            persisted.sysfs_changes[0].path,
+            previous_state.sysfs_changes[0].path
+        );
+        assert_eq!(
+            persisted.sysfs_changes[0].original_value,
+            previous_state.sysfs_changes[0].original_value
+        );
+        assert_eq!(
+            persisted.sysfs_changes[0].new_value,
+            previous_state.sysfs_changes[0].new_value
+        );
+        assert!(persisted.kernel_params_added.is_empty());
     }
 }
