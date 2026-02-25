@@ -22,10 +22,10 @@ impl NetworkInfo {
 
                     // Read driver
                     let driver_path = sysfs.path(format!("{}/{}/device/driver", net_base, iface));
-                    if let Ok(target) = std::fs::read_link(&driver_path) {
-                        if let Some(name) = target.file_name() {
-                            info.wifi_driver = name.to_str().map(String::from);
-                        }
+                    if let Ok(target) = std::fs::read_link(&driver_path)
+                        && let Some(name) = target.file_name()
+                    {
+                        info.wifi_driver = name.to_str().map(String::from);
                     }
 
                     break;

@@ -50,10 +50,9 @@ impl BatteryInfo {
         if let Some(ptype) = sysfs
             .read_optional(format!("{}/type", base))
             .unwrap_or(None)
+            && ptype != "Battery"
         {
-            if ptype != "Battery" {
-                return info;
-            }
+            return info;
         }
 
         info.present = sysfs
@@ -87,10 +86,10 @@ impl BatteryInfo {
             (Some(f), Some(d)) => (Some(f), Some(d)),
             _ => (info.charge_full_uah, info.charge_full_design_uah),
         };
-        if let (Some(full), Some(design)) = (full, design) {
-            if design > 0 {
-                info.health_percent = Some((full as f64 / design as f64) * 100.0);
-            }
+        if let (Some(full), Some(design)) = (full, design)
+            && design > 0
+        {
+            info.health_percent = Some((full as f64 / design as f64) * 100.0);
         }
 
         info

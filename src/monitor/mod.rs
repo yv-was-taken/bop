@@ -111,7 +111,7 @@ pub fn run() -> Result<()> {
         let _ = std::io::stdout().flush();
 
         // Move to next line every 10 readings for scrollback
-        if elapsed.as_secs() % 20 == 0 {
+        if elapsed.as_secs().is_multiple_of(20) {
             println!();
         }
 

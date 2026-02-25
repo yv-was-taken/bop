@@ -149,21 +149,21 @@ pub fn build_plan(hw: &HardwareInfo, sysfs: &SysfsRoot) -> ApplyPlan {
     };
 
     // CPU: EPP -> balance_power
-    if hw.cpu.epp.as_deref() != Some("balance_power") && hw.cpu.epp.as_deref() != Some("power") {
-        if let Ok(cpus) = sysfs.list_dir("sys/devices/system/cpu") {
-            for cpu in cpus {
-                if cpu.starts_with("cpu") && cpu[3..].chars().all(|c| c.is_ascii_digit()) {
-                    let path = format!(
-                        "sys/devices/system/cpu/{}/cpufreq/energy_performance_preference",
-                        cpu
-                    );
-                    if sysfs.exists(&path) {
-                        plan.sysfs_writes.push(PlannedSysfsWrite {
-                            path: format!("/{}", path),
-                            value: "balance_power".to_string(),
-                            description: format!("Set {} EPP to balance_power", cpu),
-                        });
-                    }
+    if hw.cpu.epp.as_deref() != Some("balance_power") && hw.cpu.epp.as_deref() != Some("power")
+        && let Ok(cpus) = sysfs.list_dir("sys/devices/system/cpu")
+    {
+        for cpu in cpus {
+            if cpu.starts_with("cpu") && cpu[3..].chars().all(|c| c.is_ascii_digit()) {
+                let path = format!(
+                    "sys/devices/system/cpu/{}/cpufreq/energy_performance_preference",
+                    cpu
+                );
+                if sysfs.exists(&path) {
+                    plan.sysfs_writes.push(PlannedSysfsWrite {
+                        path: format!("/{}", path),
+                        value: "balance_power".to_string(),
+                        description: format!("Set {} EPP to balance_power", cpu),
+                    });
                 }
             }
         }
@@ -210,7 +210,7 @@ pub fn build_plan(hw: &HardwareInfo, sysfs: &SysfsRoot) -> ApplyPlan {
         && hw
             .kernel_param_value("amdgpu.abmlevel")
             .and_then(|v| v.parse::<u32>().ok())
-            .map_or(true, |v| v < 3)
+            .is_none_or(|v| v < 3)
     {
         plan.kernel_params.push("amdgpu.abmlevel=3".to_string());
     }

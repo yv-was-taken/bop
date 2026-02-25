@@ -18,23 +18,23 @@ pub fn check(sysfs: &SysfsRoot) -> Vec<Finding> {
                 .unwrap_or(None)
                 .and_then(|v| v.parse().ok());
 
-            if let (Some(cur), Some(max)) = (brightness, max_brightness) {
-                if max > 0 {
-                    let pct = (cur as f64 / max as f64 * 100.0) as u32;
-                    if pct > 70 {
-                        findings.push(
-                            Finding::new(
-                                Severity::Info,
-                                "Display",
-                                format!("Backlight at {}% - reducing saves significant power", pct),
-                            )
-                            .current(format!("{}%", pct))
-                            .recommended("30-50% for indoor use")
-                            .impact("Display is often the largest power consumer")
-                            .path(format!("{}/brightness", base))
-                            .weight(0), // Info only
-                        );
-                    }
+            if let (Some(cur), Some(max)) = (brightness, max_brightness)
+                && max > 0
+            {
+                let pct = (cur as f64 / max as f64 * 100.0) as u32;
+                if pct > 70 {
+                    findings.push(
+                        Finding::new(
+                            Severity::Info,
+                            "Display",
+                            format!("Backlight at {}% - reducing saves significant power", pct),
+                        )
+                        .current(format!("{}%", pct))
+                        .recommended("30-50% for indoor use")
+                        .impact("Display is often the largest power consumer")
+                        .path(format!("{}/brightness", base))
+                        .weight(0), // Info only
+                    );
                 }
             }
         }

@@ -32,10 +32,10 @@ impl GpuInfo {
 
                         // Read driver (follow the symlink)
                         let driver_path = sysfs.path(format!("{}/driver", card_path));
-                        if let Ok(target) = std::fs::read_link(&driver_path) {
-                            if let Some(name) = target.file_name() {
-                                info.driver = name.to_str().map(String::from);
-                            }
+                        if let Ok(target) = std::fs::read_link(&driver_path)
+                            && let Some(name) = target.file_name()
+                        {
+                            info.driver = name.to_str().map(String::from);
                         }
 
                         break;
@@ -66,12 +66,11 @@ impl GpuInfo {
             if let Some(val) = sysfs
                 .read_optional("sys/module/amdgpu/parameters/abmlevel")
                 .unwrap_or(None)
+                && !info.has_abm
             {
-                if !info.has_abm {
-                    info.abm_level = val.parse().ok();
-                    // ABM is available if the module parameter file exists
-                    info.has_abm = true;
-                }
+                info.abm_level = val.parse().ok();
+                // ABM is available if the module parameter file exists
+                info.has_abm = true;
             }
         }
 

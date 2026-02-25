@@ -20,12 +20,12 @@ pub struct AcpiWakeupSource {
 
 impl PlatformInfo {
     pub fn detect(sysfs: &SysfsRoot) -> Self {
-        let mut info = Self::default();
-
-        // Platform profile
-        info.platform_profile = sysfs
-            .read_optional("sys/firmware/acpi/platform_profile")
-            .unwrap_or(None);
+        let mut info = Self {
+            platform_profile: sysfs
+                .read_optional("sys/firmware/acpi/platform_profile")
+                .unwrap_or(None),
+            ..Self::default()
+        };
 
         if let Some(avail) = sysfs
             .read_optional("sys/firmware/acpi/platform_profile_choices")
@@ -59,9 +59,9 @@ impl PlatformInfo {
                 if parts.len() >= 3 {
                     let device = parts[0].to_string();
                     // Format: DEVICE  S-STATE  STATUS  SYSFS_NODE
-                    let status = if parts.iter().any(|p| *p == "*enabled") {
+                    let status = if parts.contains(&"*enabled") {
                         "enabled".to_string()
-                    } else if parts.iter().any(|p| *p == "*disabled") {
+                    } else if parts.contains(&"*disabled") {
                         "disabled".to_string()
                     } else {
                         // Try to find enabled/disabled in the parts

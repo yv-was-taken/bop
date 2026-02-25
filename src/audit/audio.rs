@@ -41,17 +41,17 @@ pub fn check(sysfs: &SysfsRoot) -> Vec<Finding> {
 
     // Check power_save_controller
     let controller_path = "sys/module/snd_hda_intel/parameters/power_save_controller";
-    if let Some(val) = sysfs.read_optional(controller_path).unwrap_or(None) {
-        if val == "N" {
-            findings.push(
-                Finding::new(Severity::Low, "Audio", "HDA controller power save disabled")
-                    .current("N (disabled)")
-                    .recommended("Y (enabled)")
-                    .impact("Controller stays powered when idle")
-                    .path(controller_path)
-                    .weight(2),
-            );
-        }
+    if let Some(val) = sysfs.read_optional(controller_path).unwrap_or(None)
+        && val == "N"
+    {
+        findings.push(
+            Finding::new(Severity::Low, "Audio", "HDA controller power save disabled")
+                .current("N (disabled)")
+                .recommended("Y (enabled)")
+                .impact("Controller stays powered when idle")
+                .path(controller_path)
+                .weight(2),
+        );
     }
 
     findings

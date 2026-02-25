@@ -9,21 +9,21 @@ pub fn check(hw: &HardwareInfo) -> Vec<Finding> {
     }
 
     // Check DPM level
-    if let Some(ref dpm) = hw.gpu.dpm_level {
-        if dpm != "auto" {
-            findings.push(
-                Finding::new(
-                    Severity::Medium,
-                    "GPU",
-                    format!("GPU DPM level '{}' instead of auto", dpm),
-                )
-                .current(dpm)
-                .recommended("auto")
-                .impact("GPU may not enter low-power states")
-                .path("power_dpm_force_performance_level")
-                .weight(5),
-            );
-        }
+    if let Some(ref dpm) = hw.gpu.dpm_level
+        && dpm != "auto"
+    {
+        findings.push(
+            Finding::new(
+                Severity::Medium,
+                "GPU",
+                format!("GPU DPM level '{}' instead of auto", dpm),
+            )
+            .current(dpm)
+            .recommended("auto")
+            .impact("GPU may not enter low-power states")
+            .path("power_dpm_force_performance_level")
+            .weight(5),
+        );
     }
 
     // ABM is checked via kernel_params module since it's a kernel parameter

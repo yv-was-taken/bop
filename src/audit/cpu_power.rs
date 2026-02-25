@@ -93,21 +93,21 @@ pub fn check(hw: &HardwareInfo) -> Vec<Finding> {
     }
 
     // Check governor
-    if let Some(ref governor) = hw.cpu.governor {
-        if hw.cpu.is_amd_pstate() && governor != "powersave" {
-            findings.push(
-                Finding::new(
-                    Severity::Medium,
-                    "CPU",
-                    format!("Governor '{}' suboptimal with amd-pstate", governor),
-                )
-                .current(governor)
-                .recommended("powersave")
-                .impact("amd-pstate uses EPP for power/perf balance; powersave governor is correct")
-                .path("cpu*/cpufreq/scaling_governor")
-                .weight(4),
-            );
-        }
+    if let Some(ref governor) = hw.cpu.governor
+        && hw.cpu.is_amd_pstate() && governor != "powersave"
+    {
+        findings.push(
+            Finding::new(
+                Severity::Medium,
+                "CPU",
+                format!("Governor '{}' suboptimal with amd-pstate", governor),
+            )
+            .current(governor)
+            .recommended("powersave")
+            .impact("amd-pstate uses EPP for power/perf balance; powersave governor is correct")
+            .path("cpu*/cpufreq/scaling_governor")
+            .weight(4),
+        );
     }
 
     findings

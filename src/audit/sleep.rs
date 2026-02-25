@@ -39,21 +39,21 @@ pub fn check(hw: &HardwareInfo, sysfs: &SysfsRoot) -> Vec<Finding> {
     }
 
     // Check sleep state
-    if hw.platform.mem_sleep.as_deref() != Some("s2idle") {
-        if let Some(ref mem_sleep) = hw.platform.mem_sleep {
-            findings.push(
-                Finding::new(
-                    Severity::Info,
-                    "Sleep",
-                    "System using deep sleep instead of s2idle",
-                )
-                .current(mem_sleep)
-                .recommended("s2idle (for AMD platforms)")
-                .impact("s2idle is recommended for modern AMD; deep may work but has less testing")
-                .path("/sys/power/mem_sleep")
-                .weight(2),
-            );
-        }
+    if hw.platform.mem_sleep.as_deref() != Some("s2idle")
+        && let Some(ref mem_sleep) = hw.platform.mem_sleep
+    {
+        findings.push(
+            Finding::new(
+                Severity::Info,
+                "Sleep",
+                "System using deep sleep instead of s2idle",
+            )
+            .current(mem_sleep)
+            .recommended("s2idle (for AMD platforms)")
+            .impact("s2idle is recommended for modern AMD; deep may work but has less testing")
+            .path("/sys/power/mem_sleep")
+            .weight(2),
+        );
     }
 
     findings
