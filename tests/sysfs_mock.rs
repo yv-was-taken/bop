@@ -380,3 +380,210 @@ fn test_apply_plan_does_not_disable_usb4_nhi_wake_source() {
     assert!(plan.acpi_wakeup_disable.contains(&"XHC1".to_string()));
     assert!(!plan.acpi_wakeup_disable.contains(&"NHI0".to_string()));
 }
+
+#[test]
+fn test_audit_flags_missing_amd_pstate() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+
+    // Override all CPU scaling drivers to acpi-cpufreq
+    for i in 0..16 {
+        let driver_path = tmp.path().join(format!(
+            "sys/devices/system/cpu/cpu{}/cpufreq/scaling_driver",
+            i
+        ));
+        fs::write(driver_path, "acpi-cpufreq\n").unwrap();
+    }
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+
+    assert!(!hw.cpu.is_amd_pstate());
+    assert_eq!(hw.cpu.scaling_driver.as_deref(), Some("acpi-cpufreq"));
+
+    let findings = audit::cpu_power::check(&hw);
+    let pstate_finding = findings
+        .iter()
+        .find(|f| f.severity == audit::Severity::High && f.description.contains("EPP unavailable"))
+        .expect("Expected a HIGH finding about missing amd-pstate with EPP unavailable");
+
+    assert_eq!(pstate_finding.recommended_value, "amd-pstate-epp");
+    assert!(pstate_finding.description.contains("acpi-cpufreq"));
+}
+
+#[test]
+fn test_audit_nvme_apst_disabled() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+
+    // Override /proc/cmdline to include nvme_core.default_ps_max_latency_us=0
+    fs::write(
+        tmp.path().join("proc/cmdline"),
+        "initrd=\\initramfs-linux.img root=UUID=abc123 rw nvme_core.default_ps_max_latency_us=0\n",
+    )
+    .unwrap();
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+
+    let findings = audit::kernel_params::check(&hw);
+    let nvme_finding = findings
+        .iter()
+        .find(|f| f.description.contains("NVMe APST disabled"))
+        .expect("Expected a finding about NVMe APST being disabled");
+
+    assert_eq!(nvme_finding.severity, audit::Severity::Medium);
+    assert!(
+        nvme_finding
+            .current_value
+            .contains("nvme_core.default_ps_max_latency_us=0")
+    );
+}
+
+#[test]
+fn test_audit_dgpu_not_d3cold() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+
+    // Add a second DRM card (dGPU) in D0
+    let dgpu = tmp.path().join("sys/class/drm/card1/device");
+    fs::create_dir_all(&dgpu).unwrap();
+    fs::write(dgpu.join("vendor"), "0x1002\n").unwrap();
+    fs::write(dgpu.join("power_state"), "D0\n").unwrap();
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+
+    assert_eq!(hw.gpu.dgpu_power_state.as_deref(), Some("D0"));
+
+    let findings = audit::gpu_power::check(&hw);
+    let dgpu_finding = findings
+        .iter()
+        .find(|f| f.description.contains("D3cold") && f.description.contains("D0"))
+        .expect("Expected a MEDIUM finding about dGPU not being in D3cold");
+
+    assert_eq!(dgpu_finding.severity, audit::Severity::Medium);
+}
+
+#[test]
+fn test_audit_dgpu_d3cold_no_finding() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+
+    // Add a second DRM card (dGPU) already in D3cold
+    let dgpu = tmp.path().join("sys/class/drm/card1/device");
+    fs::create_dir_all(&dgpu).unwrap();
+    fs::write(dgpu.join("vendor"), "0x1002\n").unwrap();
+    fs::write(dgpu.join("power_state"), "D3cold\n").unwrap();
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+
+    assert_eq!(hw.gpu.dgpu_power_state.as_deref(), Some("D3cold"));
+
+    let findings = audit::gpu_power::check(&hw);
+    assert!(
+        !findings
+            .iter()
+            .any(|f| f.description.contains("D3cold") || f.description.contains("Discrete GPU")),
+        "Expected no finding about dGPU power state when already in D3cold, but got: {:?}",
+        findings
+    );
+}
+
+#[test]
+fn test_build_plan_includes_usb_autosuspend() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+
+    // Add USB devices
+    let usb_base = tmp.path().join("sys/bus/usb/devices");
+
+    // 1-1: power/control = on (should be included in plan)
+    let usb1 = usb_base.join("1-1/power");
+    fs::create_dir_all(&usb1).unwrap();
+    fs::write(usb1.join("control"), "on\n").unwrap();
+
+    // 1-2: power/control = auto (already optimal, should NOT be included)
+    let usb2 = usb_base.join("1-2/power");
+    fs::create_dir_all(&usb2).unwrap();
+    fs::write(usb2.join("control"), "auto\n").unwrap();
+
+    // 1-1:1.0: interface entry (contains colon, should be skipped)
+    let usb_iface = usb_base.join("1-1:1.0/power");
+    fs::create_dir_all(&usb_iface).unwrap();
+    fs::write(usb_iface.join("control"), "on\n").unwrap();
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+    let plan = apply::build_plan(&hw, &sysfs);
+
+    // Should include 1-1 (set to auto)
+    assert!(
+        plan.sysfs_writes.iter().any(|w| w.path.contains("1-1/")
+            && w.path.contains("power/control")
+            && w.value == "auto"),
+        "Expected plan to include sysfs write for USB 1-1 to set auto"
+    );
+
+    // Should NOT include 1-2 (already auto)
+    assert!(
+        !plan.sysfs_writes.iter().any(|w| w.path.contains("1-2/")),
+        "Expected plan to NOT include USB 1-2 (already auto)"
+    );
+
+    // Should NOT include 1-1:1.0 (interface entry with colon)
+    assert!(
+        !plan.sysfs_writes.iter().any(|w| w.path.contains("1-1:1.0")),
+        "Expected plan to NOT include USB interface 1-1:1.0"
+    );
+}
+
+#[test]
+fn test_build_plan_includes_audio_and_gpu_dpm() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+
+    // Override audio settings to suboptimal values
+    let hda = tmp.path().join("sys/module/snd_hda_intel/parameters");
+    fs::write(hda.join("power_save"), "0\n").unwrap();
+    fs::write(hda.join("power_save_controller"), "N\n").unwrap();
+
+    // Override GPU DPM to suboptimal value
+    fs::write(
+        tmp.path()
+            .join("sys/class/drm/card0/device/power_dpm_force_performance_level"),
+        "high\n",
+    )
+    .unwrap();
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+    let plan = apply::build_plan(&hw, &sysfs);
+
+    // Audio power_save -> 1
+    assert!(
+        plan.sysfs_writes
+            .iter()
+            .any(|w| w.path.contains("power_save")
+                && !w.path.contains("controller")
+                && w.value == "1"),
+        "Expected plan to include sysfs write for audio power_save -> 1"
+    );
+
+    // Audio power_save_controller -> Y
+    assert!(
+        plan.sysfs_writes
+            .iter()
+            .any(|w| w.path.contains("power_save_controller") && w.value == "Y"),
+        "Expected plan to include sysfs write for audio power_save_controller -> Y"
+    );
+
+    // GPU DPM -> auto
+    assert!(
+        plan.sysfs_writes
+            .iter()
+            .any(|w| w.path.contains("power_dpm_force_performance_level") && w.value == "auto"),
+        "Expected plan to include sysfs write for GPU DPM -> auto"
+    );
+}
