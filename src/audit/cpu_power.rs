@@ -4,6 +4,23 @@ use crate::detect::HardwareInfo;
 pub fn check(hw: &HardwareInfo) -> Vec<Finding> {
     let mut findings = Vec::new();
 
+    // Check if amd-pstate driver is active (AMD systems only)
+    if hw.cpu.is_amd() && !hw.cpu.is_amd_pstate() {
+        let driver = hw.cpu.scaling_driver.as_deref().unwrap_or("unknown");
+        findings.push(
+            Finding::new(
+                Severity::High,
+                "CPU",
+                format!("Using '{}' instead of amd-pstate - EPP unavailable", driver),
+            )
+            .current(driver)
+            .recommended("amd-pstate-epp")
+            .impact("~2-5W savings; enables fine-grained energy/performance tuning")
+            .path("cpu0/cpufreq/scaling_driver")
+            .weight(9),
+        );
+    }
+
     // Check EPP
     if let Some(ref epp) = hw.cpu.epp {
         match epp.as_str() {

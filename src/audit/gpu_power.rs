@@ -26,16 +26,22 @@ pub fn check(hw: &HardwareInfo) -> Vec<Finding> {
         );
     }
 
-    // ABM is checked via kernel_params module since it's a kernel parameter
-    // Here we just note if ABM is available but not configured
-    if hw.gpu.has_abm && hw.gpu.abm_level.unwrap_or(0) == 0 {
-        // Only report if kernel_params didn't already catch it
-        // (kernel_params checks the cmdline; this checks the live module param)
-        if hw.has_kernel_param("amdgpu.abmlevel") {
-            // kernel_params module will handle this
-        } else {
-            // No finding here - kernel_params.rs handles the ABM check
-        }
+    // Check dGPU power state (Framework 16 expansion bay GPU)
+    if let Some(ref power_state) = hw.gpu.dgpu_power_state
+        && power_state != "D3cold"
+    {
+        findings.push(
+            Finding::new(
+                Severity::Medium,
+                "GPU",
+                format!("Discrete GPU in {} instead of D3cold", power_state),
+            )
+            .current(power_state)
+            .recommended("D3cold")
+            .impact("~5-8W savings when dGPU is idle")
+            .path("power_state")
+            .weight(7),
+        );
     }
 
     findings

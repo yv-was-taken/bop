@@ -48,6 +48,24 @@ pub fn check(hw: &HardwareInfo) -> Vec<Finding> {
         );
     }
 
+    // Check for NVMe APST disabled
+    if let Some(ref val) = hw.kernel_param_value("nvme_core.default_ps_max_latency_us")
+        && val == "0"
+    {
+        findings.push(
+            Finding::new(
+                Severity::Medium,
+                "Kernel",
+                "NVMe APST disabled - drive stays in highest power state",
+            )
+            .current("nvme_core.default_ps_max_latency_us=0")
+            .recommended("Remove parameter (let APST work normally)")
+            .impact("~0.5-1W savings from NVMe power state transitions")
+            .path("/proc/cmdline")
+            .weight(5),
+        );
+    }
+
     // Check for amdgpu.abmlevel
     if hw.gpu.is_amd() {
         match hw.kernel_param_value("amdgpu.abmlevel") {

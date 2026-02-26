@@ -8,37 +8,60 @@ pub struct GpuInfo {
     pub dpm_level: Option<String>,
     pub abm_level: Option<u32>,
     pub has_abm: bool,
+    /// Discrete GPU info (second DRM card, e.g. Framework 16 expansion bay)
+    pub dgpu_card_path: Option<String>,
+    pub dgpu_vendor: Option<String>,
+    pub dgpu_power_state: Option<String>,
 }
 
 impl GpuInfo {
     pub fn detect(sysfs: &SysfsRoot) -> Self {
         let mut info = Self::default();
 
-        // Find the first DRM card
+        // Find DRM cards (first = iGPU, second = dGPU if present)
         if let Ok(entries) = sysfs.list_dir("sys/class/drm") {
+            let mut found_first = false;
             for entry in &entries {
                 if entry.starts_with("card") && !entry.contains('-') {
                     let card_path = format!("sys/class/drm/{}/device", entry);
                     if sysfs.exists(&card_path) {
-                        info.card_path = Some(card_path.clone());
+                        if !found_first {
+                            info.card_path = Some(card_path.clone());
 
-                        // Read vendor
-                        if let Some(vendor) = sysfs
-                            .read_optional(format!("{}/vendor", card_path))
-                            .unwrap_or(None)
-                        {
-                            info.vendor = Some(vendor);
+                            // Read vendor
+                            if let Some(vendor) = sysfs
+                                .read_optional(format!("{}/vendor", card_path))
+                                .unwrap_or(None)
+                            {
+                                info.vendor = Some(vendor);
+                            }
+
+                            // Read driver (follow the symlink)
+                            let driver_path = sysfs.path(format!("{}/driver", card_path));
+                            if let Ok(target) = std::fs::read_link(&driver_path)
+                                && let Some(name) = target.file_name()
+                            {
+                                info.driver = name.to_str().map(String::from);
+                            }
+
+                            found_first = true;
+                        } else {
+                            // Second card = discrete GPU
+                            info.dgpu_card_path = Some(card_path.clone());
+
+                            if let Some(vendor) = sysfs
+                                .read_optional(format!("{}/vendor", card_path))
+                                .unwrap_or(None)
+                            {
+                                info.dgpu_vendor = Some(vendor);
+                            }
+
+                            info.dgpu_power_state = sysfs
+                                .read_optional(format!("{}/power_state", card_path))
+                                .unwrap_or(None);
+
+                            break;
                         }
-
-                        // Read driver (follow the symlink)
-                        let driver_path = sysfs.path(format!("{}/driver", card_path));
-                        if let Ok(target) = std::fs::read_link(&driver_path)
-                            && let Some(name) = target.file_name()
-                        {
-                            info.driver = name.to_str().map(String::from);
-                        }
-
-                        break;
                     }
                 }
             }
