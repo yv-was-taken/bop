@@ -2,6 +2,7 @@ use bop::apply;
 use bop::audit;
 use bop::detect::HardwareInfo;
 use bop::profile;
+use bop::snapshot::Snapshot;
 use bop::sysfs::SysfsRoot;
 use std::fs;
 use std::path::Path;
@@ -1282,5 +1283,192 @@ fn test_no_profile_without_battery() {
     assert!(
         matched.is_none(),
         "Desktop without battery should not match any profile"
+    );
+}
+
+// ---- Real hardware snapshot tests ----
+
+/// Path to the real Framework 16 snapshot fixture.
+fn snapshot_fixture_path() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/framework16_amd.json")
+}
+
+#[test]
+fn test_snapshot_load_and_materialize() {
+    let snap = Snapshot::load(&snapshot_fixture_path()).expect("Failed to load snapshot fixture");
+
+    assert_eq!(snap.version, "0.1.0");
+    assert!(!snap.files.is_empty(), "Snapshot should contain files");
+    assert!(!snap.dirs.is_empty(), "Snapshot should contain dirs");
+
+    // Materialize into a temp dir
+    let tmp = TempDir::new().unwrap();
+    let sysfs = snap
+        .materialize(tmp.path())
+        .expect("Failed to materialize snapshot");
+
+    // Verify some key files were created
+    assert!(
+        tmp.path().join("sys/class/dmi/id/board_vendor").exists(),
+        "board_vendor should exist after materialization"
+    );
+    assert!(
+        tmp.path().join("proc/cpuinfo").exists(),
+        "proc/cpuinfo should exist after materialization"
+    );
+
+    // Verify content is correct
+    let vendor = sysfs.read("sys/class/dmi/id/board_vendor").unwrap();
+    assert_eq!(vendor, "Framework");
+}
+
+#[test]
+fn test_snapshot_framework16_detection() {
+    let snap = Snapshot::load(&snapshot_fixture_path()).unwrap();
+    let tmp = TempDir::new().unwrap();
+    let sysfs = snap.materialize(tmp.path()).unwrap();
+
+    let hw = HardwareInfo::detect(&sysfs);
+
+    // DMI detection
+    assert!(hw.dmi.is_framework(), "Should detect Framework vendor");
+    assert!(hw.dmi.is_framework_16(), "Should detect Framework 16");
+    assert_eq!(hw.dmi.board_name.as_deref(), Some("FRANMZCP09"));
+    assert_eq!(
+        hw.dmi.product_name.as_deref(),
+        Some("Laptop 16 (AMD Ryzen 7040 Series)")
+    );
+
+    // CPU detection
+    assert!(hw.cpu.is_amd(), "Should detect AMD CPU");
+    assert!(
+        hw.cpu.is_amd_pstate(),
+        "Should detect amd-pstate-epp driver"
+    );
+    assert_eq!(hw.cpu.family, Some(25));
+    assert_eq!(hw.cpu.model, Some(116));
+    assert_eq!(hw.cpu.online_cpus, 16);
+    assert_eq!(hw.cpu.scaling_driver.as_deref(), Some("amd-pstate-epp"));
+
+    // Battery detection
+    assert!(hw.battery.present, "Should detect battery");
+    assert_eq!(hw.battery.capacity_percent, Some(88));
+
+    // GPU detection
+    assert!(hw.gpu.is_amd(), "Should detect AMD GPU");
+}
+
+#[test]
+fn test_snapshot_framework16_profile_matches() {
+    let snap = Snapshot::load(&snapshot_fixture_path()).unwrap();
+    let tmp = TempDir::new().unwrap();
+    let sysfs = snap.materialize(tmp.path()).unwrap();
+
+    let hw = HardwareInfo::detect(&sysfs);
+    let matched = profile::detect_profile(&hw);
+
+    assert!(matched.is_some(), "Should match a profile");
+    assert_eq!(
+        matched.unwrap().name(),
+        "Framework Laptop 16 (AMD Ryzen 7040 Series)",
+        "Should match Framework 16 AMD profile"
+    );
+}
+
+#[test]
+fn test_snapshot_framework16_audit() {
+    let snap = Snapshot::load(&snapshot_fixture_path()).unwrap();
+    let tmp = TempDir::new().unwrap();
+    let sysfs = snap.materialize(tmp.path()).unwrap();
+
+    let hw = HardwareInfo::detect(&sysfs);
+
+    // Run audit checks that don't require external commands
+    let cpu_findings = audit::cpu_power::check(&hw);
+    let kernel_findings = audit::kernel_params::check(&hw);
+    let pci_findings = audit::pci_power::check(&hw);
+    let gpu_findings = audit::gpu_power::check(&hw);
+    let sysctl_findings = audit::sysctl::check(&sysfs);
+
+    let mut all_findings = Vec::new();
+    all_findings.extend(cpu_findings);
+    all_findings.extend(kernel_findings);
+    all_findings.extend(pci_findings);
+    all_findings.extend(gpu_findings);
+    all_findings.extend(sysctl_findings);
+
+    // The real snapshot should produce some findings (system isn't perfectly optimized)
+    assert!(
+        !all_findings.is_empty(),
+        "Real hardware snapshot should produce at least some audit findings"
+    );
+
+    // Score should be reasonable (not 0, not 100 since there are some findings)
+    let score = audit::calculate_score(&all_findings);
+    assert!(
+        score < 100,
+        "Score should be below 100 with findings, got {}",
+        score
+    );
+}
+
+#[test]
+fn test_snapshot_round_trip_from_fixture() {
+    // Load the fixture snapshot
+    let original_snap = Snapshot::load(&snapshot_fixture_path()).unwrap();
+
+    // Materialize it into a temp dir
+    let tmp = TempDir::new().unwrap();
+    let sysfs = original_snap.materialize(tmp.path()).unwrap();
+
+    // Capture a new snapshot from the materialized tree
+    let recaptured_snap = Snapshot::capture(&sysfs);
+
+    // The recaptured snapshot should contain all the same file paths,
+    // except __driver_name and __wifi_driver entries which are synthetic
+    // markers derived from symlinks that don't exist in a materialized tree.
+    for key in original_snap.files.keys() {
+        if key.contains("__driver_name") || key.contains("__wifi_driver") {
+            continue;
+        }
+        assert!(
+            recaptured_snap.files.contains_key(key),
+            "Recaptured snapshot is missing file: {}",
+            key
+        );
+    }
+
+    // Verify that the file contents match (materialize adds \n, capture trims)
+    for (key, original_value) in &original_snap.files {
+        if key.contains("__driver_name") || key.contains("__wifi_driver") {
+            continue;
+        }
+        if let Some(recaptured_value) = recaptured_snap.files.get(key) {
+            assert_eq!(
+                original_value, recaptured_value,
+                "Value mismatch for {}: original={:?}, recaptured={:?}",
+                key, original_value, recaptured_value
+            );
+        }
+    }
+}
+
+#[test]
+fn test_snapshot_build_plan() {
+    let snap = Snapshot::load(&snapshot_fixture_path()).unwrap();
+    let tmp = TempDir::new().unwrap();
+    let sysfs = snap.materialize(tmp.path()).unwrap();
+
+    let hw = HardwareInfo::detect(&sysfs);
+    let plan = apply::build_plan(&hw, &sysfs);
+
+    // The real snapshot has balance_power EPP already set, so EPP writes
+    // should not appear in the plan (already optimal or close)
+    // Platform profile is "balanced" which should trigger a write to "low-power"
+    assert!(
+        plan.sysfs_writes
+            .iter()
+            .any(|w| w.path.contains("platform_profile") && w.value == "low-power"),
+        "Plan should include platform_profile -> low-power (snapshot has 'balanced')"
     );
 }
