@@ -7,5 +7,6 @@ pub mod monitor;
 pub mod output;
 pub mod profile;
 pub mod revert;
+pub mod status;
 pub mod sysfs;
 pub mod wake;
