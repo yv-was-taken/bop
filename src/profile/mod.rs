@@ -1,4 +1,5 @@
 pub mod framework16_amd;
+pub mod generic_laptop;
 
 use crate::audit::Finding;
 use crate::detect::HardwareInfo;
@@ -16,8 +17,12 @@ pub trait HardwareProfile: std::fmt::Debug {
 }
 
 /// Registry of all known hardware profiles.
+/// Specific profiles first, generic fallback last.
 pub fn all_profiles() -> Vec<Box<dyn HardwareProfile>> {
-    vec![Box::new(framework16_amd::Framework16Amd)]
+    vec![
+        Box::new(framework16_amd::Framework16Amd),
+        Box::new(generic_laptop::GenericLaptop),
+    ]
 }
 
 /// Find the best matching profile for the detected hardware.

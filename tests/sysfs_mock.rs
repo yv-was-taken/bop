@@ -1090,3 +1090,197 @@ fn test_audit_amd_pstate_guided_no_finding() {
         "Should not emit amd-pstate finding when mode is guided"
     );
 }
+
+// ---- Generic laptop profile tests ----
+
+/// Create a mock sysfs tree simulating a generic Intel laptop (e.g., ThinkPad)
+/// with suboptimal power settings.
+fn create_generic_laptop_fixture(root: &Path) {
+    // DMI — not Framework, not any known vendor profile
+    let dmi = root.join("sys/class/dmi/id");
+    fs::create_dir_all(&dmi).unwrap();
+    fs::write(dmi.join("board_vendor"), "LENOVO\n").unwrap();
+    fs::write(dmi.join("board_name"), "21HMCTO1WW\n").unwrap();
+    fs::write(dmi.join("product_name"), "ThinkPad X1 Carbon Gen 11\n").unwrap();
+    fs::write(dmi.join("product_family"), "ThinkPad X1 Carbon Gen 11\n").unwrap();
+    fs::write(dmi.join("bios_version"), "1.20\n").unwrap();
+
+    // CPU — Intel
+    let cpu_base = root.join("sys/devices/system/cpu");
+    fs::create_dir_all(cpu_base.join("cpufreq")).unwrap();
+    fs::write(cpu_base.join("cpufreq/boost"), "1\n").unwrap();
+
+    let cpuinfo = "processor\t: 0\nvendor_id\t: GenuineIntel\ncpu family\t: 6\nmodel\t\t: 186\nmodel name\t: 13th Gen Intel(R) Core(TM) i7-1365U\n\n";
+    fs::create_dir_all(root.join("proc")).unwrap();
+    fs::write(root.join("proc/cpuinfo"), cpuinfo).unwrap();
+    fs::write(root.join("proc/cmdline"), "\n").unwrap();
+
+    // 4 CPU cores with suboptimal EPP
+    for i in 0..4 {
+        let cpu_dir = cpu_base.join(format!("cpu{}/cpufreq", i));
+        fs::create_dir_all(&cpu_dir).unwrap();
+        fs::write(cpu_dir.join("scaling_driver"), "intel_pstate\n").unwrap();
+        fs::write(cpu_dir.join("scaling_governor"), "powersave\n").unwrap();
+        fs::write(
+            cpu_dir.join("energy_performance_preference"),
+            "balance_performance\n",
+        )
+        .unwrap();
+        fs::write(
+            cpu_dir.join("energy_performance_available_preferences"),
+            "default performance balance_performance balance_power power\n",
+        )
+        .unwrap();
+    }
+
+    // Battery present
+    let bat = root.join("sys/class/power_supply/BAT0");
+    fs::create_dir_all(&bat).unwrap();
+    fs::write(bat.join("type"), "Battery\n").unwrap();
+    fs::write(bat.join("present"), "1\n").unwrap();
+    fs::write(bat.join("status"), "Discharging\n").unwrap();
+    fs::write(bat.join("capacity"), "75\n").unwrap();
+    fs::write(bat.join("energy_now"), "40000000\n").unwrap();
+    fs::write(bat.join("energy_full"), "54000000\n").unwrap();
+    fs::write(bat.join("energy_full_design"), "57000000\n").unwrap();
+    fs::write(bat.join("power_now"), "8000000\n").unwrap();
+
+    // Platform profile
+    let platform = root.join("sys/firmware/acpi");
+    fs::create_dir_all(&platform).unwrap();
+    fs::write(platform.join("platform_profile"), "balanced\n").unwrap();
+    fs::write(
+        platform.join("platform_profile_choices"),
+        "low-power balanced performance\n",
+    )
+    .unwrap();
+
+    // PCI ASPM — suboptimal
+    let pcie = root.join("sys/module/pcie_aspm/parameters");
+    fs::create_dir_all(&pcie).unwrap();
+    fs::write(
+        pcie.join("policy"),
+        "[default] performance powersave powersupersave\n",
+    )
+    .unwrap();
+
+    // A PCI device without runtime PM
+    let pci_dev = root.join("sys/bus/pci/devices/0000:00:1f.3");
+    fs::create_dir_all(pci_dev.join("power")).unwrap();
+    fs::write(pci_dev.join("power/control"), "on\n").unwrap();
+    fs::write(pci_dev.join("class"), "0x040300\n").unwrap();
+
+    // NMI watchdog enabled
+    let proc_sys = root.join("proc/sys/kernel");
+    fs::create_dir_all(&proc_sys).unwrap();
+    fs::write(proc_sys.join("nmi_watchdog"), "1\n").unwrap();
+
+    // Dirty writeback low
+    let vm = root.join("proc/sys/vm");
+    fs::create_dir_all(&vm).unwrap();
+    fs::write(vm.join("dirty_writeback_centisecs"), "500\n").unwrap();
+}
+
+#[test]
+fn test_generic_laptop_profile_matches() {
+    let tmp = TempDir::new().unwrap();
+    create_generic_laptop_fixture(tmp.path());
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+
+    let matched = profile::detect_profile(&hw);
+    assert!(
+        matched.is_some(),
+        "Generic laptop profile should match any machine with a battery"
+    );
+    assert_eq!(matched.unwrap().name(), "Generic Linux Laptop");
+}
+
+#[test]
+fn test_generic_laptop_does_not_override_framework16() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+
+    let matched = profile::detect_profile(&hw);
+    assert!(matched.is_some());
+    assert_eq!(
+        matched.unwrap().name(),
+        "Framework Laptop 16 (AMD Ryzen 7040 Series)",
+        "Framework 16 profile should take priority over generic"
+    );
+}
+
+#[test]
+fn test_generic_laptop_audit_runs_generic_checks() {
+    let tmp = TempDir::new().unwrap();
+    create_generic_laptop_fixture(tmp.path());
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+
+    // Run the same checks the generic profile would run, against the mock sysfs
+    let mut findings = Vec::new();
+    findings.extend(audit::cpu_power::check(&hw));
+    findings.extend(audit::pci_power::check(&hw));
+    findings.extend(audit::sysctl::check(&sysfs));
+
+    // Should flag suboptimal EPP
+    assert!(
+        findings.iter().any(|f| f.description.contains("EPP")),
+        "Should detect suboptimal EPP on generic laptop"
+    );
+
+    // Should flag ASPM not set to powersupersave
+    assert!(
+        findings.iter().any(|f| f.description.contains("ASPM")),
+        "Should detect suboptimal ASPM on generic laptop"
+    );
+
+    // Should flag NMI watchdog
+    assert!(
+        findings.iter().any(|f| f.description.contains("NMI")),
+        "Should detect NMI watchdog enabled"
+    );
+
+    // Should flag dirty writeback
+    assert!(
+        findings.iter().any(|f| f.description.contains("writeback")),
+        "Should detect low dirty writeback interval"
+    );
+}
+
+#[test]
+fn test_no_profile_without_battery() {
+    let tmp = TempDir::new().unwrap();
+
+    // Minimal sysfs with DMI but no battery
+    let dmi = tmp.path().join("sys/class/dmi/id");
+    fs::create_dir_all(&dmi).unwrap();
+    fs::write(dmi.join("board_vendor"), "ASUS\n").unwrap();
+    fs::write(dmi.join("board_name"), "ROG STRIX B550-F\n").unwrap();
+    fs::write(dmi.join("product_name"), "System Product Name\n").unwrap();
+
+    let cpu_base = tmp.path().join("sys/devices/system/cpu");
+    fs::create_dir_all(cpu_base.join("cpufreq")).unwrap();
+    let cpuinfo = "processor\t: 0\nvendor_id\t: AuthenticAMD\ncpu family\t: 25\nmodel\t\t: 33\nmodel name\t: AMD Ryzen 7 5800X\n\n";
+    fs::create_dir_all(tmp.path().join("proc")).unwrap();
+    fs::write(tmp.path().join("proc/cpuinfo"), cpuinfo).unwrap();
+    fs::write(tmp.path().join("proc/cmdline"), "\n").unwrap();
+
+    // Power supply directory exists but no BAT*
+    fs::create_dir_all(tmp.path().join("sys/class/power_supply")).unwrap();
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+
+    assert!(!hw.battery.present);
+    let matched = profile::detect_profile(&hw);
+    assert!(
+        matched.is_none(),
+        "Desktop without battery should not match any profile"
+    );
+}
