@@ -43,6 +43,13 @@ pub enum Command {
         action: WakeAction,
     },
 
+    /// Capture system state as a JSON snapshot for debugging or profile development
+    Snapshot {
+        /// Output file path (default: stdout)
+        #[arg(short, long)]
+        output: Option<String>,
+    },
+
     /// Generate shell completions
     Completions {
         /// Shell to generate completions for (auto-detected if omitted)

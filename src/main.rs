@@ -14,6 +14,7 @@ fn main() -> Result<()> {
         Command::Monitor => cmd_monitor()?,
         Command::Revert => cmd_revert()?,
         Command::Status => cmd_status(cli.json)?,
+        Command::Snapshot { output } => cmd_snapshot(output)?,
         Command::Wake { action } => cmd_wake(action)?,
         Command::Completions { shell } => bop::cli::print_completions(shell),
     }
@@ -238,6 +239,29 @@ fn cmd_status(json: bool) -> Result<()> {
         bop::output::print_status_json(&report);
     } else {
         bop::output::print_status(&report);
+    }
+
+    Ok(())
+}
+
+fn cmd_snapshot(output: Option<String>) -> Result<()> {
+    let sysfs = SysfsRoot::system();
+    let snap = bop::snapshot::Snapshot::capture(&sysfs);
+
+    match output {
+        Some(path) => {
+            snap.save(std::path::Path::new(&path))?;
+            eprintln!("Snapshot saved to {}", path);
+            eprintln!(
+                "  {} files captured, {} directories",
+                snap.files.len(),
+                snap.dirs.len()
+            );
+        }
+        None => {
+            let json = serde_json::to_string_pretty(&snap)?;
+            println!("{}", json);
+        }
     }
 
     Ok(())
