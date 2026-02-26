@@ -252,12 +252,7 @@ pub fn print_status(report: &StatusReport) {
     if !report.kernel_params.is_empty() {
         let active = report.kernel_params.iter().filter(|k| k.in_cmdline).count();
         let total = report.kernel_params.len();
-        println!(
-            "  {} Kernel Parameters ({}/{})",
-            ">>".cyan(),
-            active,
-            total
-        );
+        println!("  {} Kernel Parameters ({}/{})", ">>".cyan(), active, total);
         for k in &report.kernel_params {
             if k.in_cmdline {
                 println!("     {} {}", "✓".green(), k.param);
@@ -272,12 +267,7 @@ pub fn print_status(report: &StatusReport) {
     if !report.services.is_empty() {
         let active = report.services.iter().filter(|s| s.still_stopped).count();
         let total = report.services.len();
-        println!(
-            "  {} Services ({}/{} stopped)",
-            ">>".cyan(),
-            active,
-            total
-        );
+        println!("  {} Services ({}/{} stopped)", ">>".cyan(), active, total);
         for s in &report.services {
             if s.still_stopped {
                 println!("     {} {} stopped", "✓".green(), s.name);
@@ -319,8 +309,5 @@ pub fn print_status(report: &StatusReport) {
 }
 
 pub fn print_status_json(report: &StatusReport) {
-    println!(
-        "{}",
-        serde_json::to_string_pretty(report).unwrap()
-    );
+    println!("{}", serde_json::to_string_pretty(report).unwrap());
 }

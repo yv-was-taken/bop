@@ -162,8 +162,7 @@ fn cmd_status(json: bool) -> Result<()> {
         None => {
             println!(
                 "{}",
-                "No optimizations applied. Run `sudo bop apply` to get started."
-                    .yellow()
+                "No optimizations applied. Run `sudo bop apply` to get started.".yellow()
             );
             return Ok(());
         }

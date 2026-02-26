@@ -276,7 +276,10 @@ XHC1\t  S0\t*enabled   pci:0000:c4:00.4";
 
         let result = check_acpi_wakeup(&state, content);
         assert_eq!(result.len(), 1);
-        assert!(!result[0].active, "XHC1 re-enabled should be detected as drift");
+        assert!(
+            !result[0].active,
+            "XHC1 re-enabled should be detected as drift"
+        );
     }
 
     #[test]
@@ -316,18 +319,38 @@ XHC1\t  S0\t*enabled   pci:0000:c4:00.4";
         let report = StatusReport {
             timestamp: "2026-02-18T00:00:00Z".to_string(),
             sysfs: vec![
-                SysfsStatus { path: "a".into(), expected: "x".into(), actual: Some("x".into()), active: true },
-                SysfsStatus { path: "b".into(), expected: "y".into(), actual: Some("z".into()), active: false },
+                SysfsStatus {
+                    path: "a".into(),
+                    expected: "x".into(),
+                    actual: Some("x".into()),
+                    active: true,
+                },
+                SysfsStatus {
+                    path: "b".into(),
+                    expected: "y".into(),
+                    actual: Some("z".into()),
+                    active: false,
+                },
             ],
-            acpi_wakeup: vec![
-                WakeupStatus { device: "XHC1".into(), active: true },
-            ],
+            acpi_wakeup: vec![WakeupStatus {
+                device: "XHC1".into(),
+                active: true,
+            }],
             kernel_params: vec![
-                KernelParamStatus { param: "foo=1".into(), in_cmdline: true },
-                KernelParamStatus { param: "bar=1".into(), in_cmdline: false },
+                KernelParamStatus {
+                    param: "foo=1".into(),
+                    in_cmdline: true,
+                },
+                KernelParamStatus {
+                    param: "bar=1".into(),
+                    in_cmdline: false,
+                },
             ],
             services: vec![],
-            systemd_unit: Some(UnitStatus { path: "/etc/systemd/system/bop.service".into(), exists: true }),
+            systemd_unit: Some(UnitStatus {
+                path: "/etc/systemd/system/bop.service".into(),
+                exists: true,
+            }),
         };
 
         assert_eq!(report.total_count(), 6);
