@@ -9,6 +9,7 @@ homepage = "https://github.com/yv-was-taken/bop"
 readme = "README.md"
 keywords = ["battery", "power", "linux", "framework", "optimization"]
 categories = ["command-line-utilities", "hardware-support"]
+default-run = "bop"
 exclude = [
     "CLAUDE.md",
     "AGENTS.md",
