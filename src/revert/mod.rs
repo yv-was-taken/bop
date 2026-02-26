@@ -42,7 +42,17 @@ pub fn revert() -> Result<()> {
     // Show reboot note whenever kernel params were actually reverted,
     // regardless of whether other steps failed.
     let remaining = if !all_succeeded {
-        ApplyState::load().unwrap_or(None)
+        match ApplyState::load() {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!(
+                    "{} Failed to reload state after partial revert ({}); assuming no kernel params remain.",
+                    "!".yellow(),
+                    e
+                );
+                None
+            }
+        }
     } else {
         None
     };

@@ -6,6 +6,7 @@ pub mod systemd;
 use crate::detect::HardwareInfo;
 use crate::error::{Error, Result};
 use crate::sysfs::SysfsRoot;
+use colored::Colorize;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 #[cfg(test)]
@@ -312,7 +313,17 @@ fn execute_plan_with_ops(
 ) -> Result<ApplyState> {
     // Load previous state up front, before any checkpoint can overwrite the file.
     let previous_state = if !dry_run {
-        ApplyState::load().unwrap_or(None)
+        match ApplyState::load() {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!(
+                    "{} Failed to load previous state ({}); proceeding without merge.",
+                    "!".yellow(),
+                    e
+                );
+                None
+            }
+        }
     } else {
         None
     };
