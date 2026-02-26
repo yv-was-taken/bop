@@ -54,7 +54,17 @@ On a Framework 16 (7940HS, 61Wh battery, ~50% brightness, light browsing/coding)
 
 ## Install
 
+### From source (any Linux distro)
+
 ```bash
+cargo install --git https://github.com/yv-was-taken/bop
+```
+
+Or clone and build locally:
+
+```bash
+git clone https://github.com/yv-was-taken/bop
+cd bop
 cargo install --path .
 ```
 
@@ -67,6 +77,16 @@ yay -S bop
 # Manual
 git clone https://aur.archlinux.org/bop.git
 cd bop && makepkg -si
+```
+
+### GitHub releases
+
+Pre-built binaries are available on the [releases page](https://github.com/yv-was-taken/bop/releases).
+
+Download, extract, and copy to your PATH:
+
+```bash
+sudo install -Dm755 bop /usr/local/bin/bop
 ```
 
 ### Man page
