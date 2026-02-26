@@ -891,7 +891,6 @@ fn test_apply_then_revert_round_trip() {
 }
 
 #[test]
-<<<<<<< HEAD
 fn test_audit_nmi_watchdog_enabled() {
     let tmp = TempDir::new().unwrap();
     create_framework16_fixture(tmp.path());
