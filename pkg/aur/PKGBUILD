@@ -22,6 +22,7 @@ build() {
     export RUSTUP_TOOLCHAIN=stable
     export CARGO_TARGET_DIR=target
     cargo build --frozen --release
+    cargo run --frozen --bin manpage
 }
 
 check() {
@@ -36,12 +37,10 @@ package() {
     install -Dm755 "target/release/bop" "$pkgdir/usr/bin/bop"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 
-    # Man pages (if generated)
-    if [ -d man ]; then
-        for f in man/*.1; do
-            install -Dm644 "$f" "$pkgdir/usr/share/man/man1/$(basename $f)"
-        done
-    fi
+    # Man pages
+    for f in man/*.1; do
+        install -Dm644 "$f" "$pkgdir/usr/share/man/man1/$(basename $f)"
+    done
 
     # Generate and install shell completions
     "$pkgdir/usr/bin/bop" completions bash > bop.bash 2>/dev/null || true
