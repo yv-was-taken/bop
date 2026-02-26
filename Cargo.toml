@@ -3,6 +3,20 @@ name = "bop"
 version = "0.1.0"
 edition = "2024"
 description = "Battery Optimization Project - hardware-aware power tuning for Linux laptops"
+license = "MIT"
+repository = "https://github.com/yv-was-taken/bop"
+homepage = "https://github.com/yv-was-taken/bop"
+readme = "README.md"
+keywords = ["battery", "power", "linux", "framework", "optimization"]
+categories = ["command-line-utilities", "hardware-support"]
+exclude = [
+    "CLAUDE.md",
+    "AGENTS.md",
+    ".claude/",
+    ".github/",
+    "docs/",
+    "pkg/",
+]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
