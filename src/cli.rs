@@ -1,4 +1,5 @@
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
 
 #[derive(Parser)]
 #[command(
@@ -41,6 +42,12 @@ pub enum Command {
         #[command(subcommand)]
         action: WakeAction,
     },
+
+    /// Generate shell completions
+    Completions {
+        /// Shell to generate completions for (auto-detected if omitted)
+        shell: Option<Shell>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -59,4 +66,15 @@ pub enum WakeAction {
     },
     /// Re-scan controllers and auto-enable wake for those with connected devices
     Scan,
+}
+
+/// Print shell completions to stdout.
+pub fn print_completions(shell: Option<Shell>) {
+    let shell = shell.or_else(Shell::from_env).unwrap_or_else(|| {
+        eprintln!(
+            "Could not detect shell. Specify one: bop completions bash|zsh|fish|elvish|powershell"
+        );
+        std::process::exit(1);
+    });
+    clap_complete::generate(shell, &mut Cli::command(), "bop", &mut std::io::stdout());
 }

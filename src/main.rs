@@ -15,6 +15,7 @@ fn main() -> Result<()> {
         Command::Revert => cmd_revert()?,
         Command::Status => cmd_status(cli.json)?,
         Command::Wake { action } => cmd_wake(action)?,
+        Command::Completions { shell } => bop::cli::print_completions(shell),
     }
 
     Ok(())
