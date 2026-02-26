@@ -891,6 +891,7 @@ fn test_apply_then_revert_round_trip() {
 }
 
 #[test]
+<<<<<<< HEAD
 fn test_audit_nmi_watchdog_enabled() {
     let tmp = TempDir::new().unwrap();
     create_framework16_fixture(tmp.path());
@@ -968,5 +969,125 @@ fn test_build_plan_includes_sysctl_writes() {
             .iter()
             .any(|w| w.path == "/proc/sys/vm/dirty_writeback_centisecs" && w.value == "1500"),
         "Expected plan to include sysfs write for dirty_writeback_centisecs -> 1500"
+    );
+}
+
+#[test]
+fn test_audit_display_refresh_rate_suggestion() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+
+    // Add an eDP connector that is connected
+    let edp = tmp.path().join("sys/class/drm/card0-eDP-1");
+    fs::create_dir_all(&edp).unwrap();
+    fs::write(edp.join("status"), "connected\n").unwrap();
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+    let findings = audit::display::check(&hw, &sysfs);
+
+    let refresh_finding = findings
+        .iter()
+        .find(|f| f.description.contains("refresh rate"))
+        .expect("Expected an Info finding about display refresh rate");
+
+    assert_eq!(refresh_finding.severity, audit::Severity::Info);
+    assert_eq!(refresh_finding.weight, 0);
+    assert!(refresh_finding.impact.contains("1W"));
+}
+
+#[test]
+fn test_audit_psr_disabled() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+
+    // Set cmdline with amdgpu.dcdebugmask=0x10
+    fs::write(
+        tmp.path().join("proc/cmdline"),
+        "initrd=\\initramfs-linux.img root=UUID=abc123 rw amdgpu.dcdebugmask=0x10\n",
+    )
+    .unwrap();
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+    let findings = audit::display::check(&hw, &sysfs);
+
+    let psr_finding = findings
+        .iter()
+        .find(|f| f.description.contains("Panel Self-Refresh"))
+        .expect("Expected an Info finding about PSR being disabled");
+
+    assert_eq!(psr_finding.severity, audit::Severity::Info);
+    assert_eq!(psr_finding.weight, 0);
+    assert_eq!(psr_finding.current_value, "0x10");
+    assert!(psr_finding.impact.contains("0.5-1.5W"));
+}
+
+#[test]
+fn test_audit_psr_not_flagged_without_dcdebugmask() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+
+    // Default cmdline without dcdebugmask
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+    let findings = audit::display::check(&hw, &sysfs);
+
+    assert!(
+        !findings
+            .iter()
+            .any(|f| f.description.contains("Panel Self-Refresh")),
+        "Should not emit PSR finding when dcdebugmask is not set"
+    );
+}
+
+#[test]
+fn test_audit_amd_pstate_active_mode() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+
+    // Add amd_pstate status file with "active" mode
+    let pstate_dir = tmp.path().join("sys/devices/system/cpu/amd_pstate");
+    fs::create_dir_all(&pstate_dir).unwrap();
+    fs::write(pstate_dir.join("status"), "active\n").unwrap();
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+
+    assert_eq!(hw.cpu.amd_pstate_mode.as_deref(), Some("active"));
+
+    let findings = audit::cpu_power::check(&hw);
+    let pstate_finding = findings
+        .iter()
+        .find(|f| f.description.contains("amd-pstate in active mode"))
+        .expect("Expected an Info finding about amd-pstate active mode");
+
+    assert_eq!(pstate_finding.severity, audit::Severity::Info);
+    assert_eq!(pstate_finding.weight, 0);
+    assert_eq!(pstate_finding.current_value, "active");
+    assert!(pstate_finding.impact.contains("1-2W"));
+}
+
+#[test]
+fn test_audit_amd_pstate_guided_no_finding() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+
+    // Add amd_pstate status file with "guided" mode
+    let pstate_dir = tmp.path().join("sys/devices/system/cpu/amd_pstate");
+    fs::create_dir_all(&pstate_dir).unwrap();
+    fs::write(pstate_dir.join("status"), "guided\n").unwrap();
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+
+    assert_eq!(hw.cpu.amd_pstate_mode.as_deref(), Some("guided"));
+
+    let findings = audit::cpu_power::check(&hw);
+    assert!(
+        !findings
+            .iter()
+            .any(|f| f.description.contains("amd-pstate in active mode")),
+        "Should not emit amd-pstate finding when mode is guided"
     );
 }

@@ -13,6 +13,7 @@ pub struct CpuInfo {
     pub online_cpus: u32,
     pub has_boost: bool,
     pub boost_enabled: bool,
+    pub amd_pstate_mode: Option<String>,
 }
 
 impl CpuInfo {
@@ -76,6 +77,11 @@ impl CpuInfo {
                 .filter(|e| e.starts_with("cpu") && e[3..].chars().all(|c| c.is_ascii_digit()))
                 .count() as u32;
         }
+
+        // amd_pstate mode
+        info.amd_pstate_mode = sysfs
+            .read_optional("sys/devices/system/cpu/amd_pstate/status")
+            .unwrap_or(None);
 
         // Boost
         if let Some(val) = sysfs

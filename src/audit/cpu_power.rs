@@ -21,6 +21,25 @@ pub fn check(hw: &HardwareInfo) -> Vec<Finding> {
         );
     }
 
+    // Check amd_pstate mode
+    if hw.cpu.is_amd_pstate()
+        && let Some(ref mode) = hw.cpu.amd_pstate_mode
+        && mode == "active"
+    {
+        findings.push(
+            Finding::new(
+                Severity::Info,
+                "CPU",
+                "amd-pstate in active mode — guided or passive may improve idle power",
+            )
+            .current("active")
+            .recommended("Experiment with guided mode (kernel param amd_pstate=guided)")
+            .impact("Potentially 1-2W better idle power (varies by workload)")
+            .path("sys/devices/system/cpu/amd_pstate/status")
+            .weight(0),
+        );
+    }
+
     // Check EPP
     if let Some(ref epp) = hw.cpu.epp {
         match epp.as_str() {

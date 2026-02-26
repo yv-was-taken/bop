@@ -28,7 +28,7 @@ impl HardwareProfile for Framework16Amd {
         findings.extend(audit::network_power::check(hw));
         findings.extend(audit::sleep::check(hw, &sysfs));
         findings.extend(audit::services::check());
-        findings.extend(audit::display::check(&sysfs));
+        findings.extend(audit::display::check(hw, &sysfs));
         findings.extend(audit::sysctl::check(&sysfs));
 
         findings
