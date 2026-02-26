@@ -1,5 +1,5 @@
 use anyhow::Result;
-use bop::cli::{Cli, Command, WakeAction};
+use bop::cli::{AutoAction, Cli, Command, WakeAction};
 use bop::detect::HardwareInfo;
 use bop::sysfs::SysfsRoot;
 use clap::Parser;
@@ -14,6 +14,7 @@ fn main() -> Result<()> {
         Command::Monitor => cmd_monitor()?,
         Command::Revert => cmd_revert()?,
         Command::Status => cmd_status(cli.json)?,
+        Command::Auto { action } => cmd_auto(action, cli.aggressive)?,
         Command::Snapshot { output } => cmd_snapshot(output)?,
         Command::Wake { action } => cmd_wake(action)?,
         Command::Completions { shell } => bop::cli::print_completions(shell),
@@ -297,6 +298,19 @@ fn cmd_status(json: bool) -> Result<()> {
         bop::output::print_status(&report);
     }
 
+    Ok(())
+}
+
+fn cmd_auto(action: Option<AutoAction>, aggressive: bool) -> Result<()> {
+    match action {
+        None => {
+            // Bare `bop auto` — called by udev
+            bop::auto::run(aggressive)?;
+        }
+        Some(AutoAction::Enable) => bop::auto::enable(aggressive)?,
+        Some(AutoAction::Disable) => bop::auto::disable()?,
+        Some(AutoAction::Status) => bop::auto::status()?,
+    }
     Ok(())
 }
 

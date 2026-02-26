@@ -50,6 +50,12 @@ pub enum Command {
         action: WakeAction,
     },
 
+    /// Automatic AC/battery power switching via udev
+    Auto {
+        #[command(subcommand)]
+        action: Option<AutoAction>,
+    },
+
     /// Capture system state as a JSON snapshot for debugging or profile development
     Snapshot {
         /// Output file path (default: stdout)
@@ -62,6 +68,16 @@ pub enum Command {
         /// Shell to generate completions for (auto-detected if omitted)
         shell: Option<Shell>,
     },
+}
+
+#[derive(Subcommand)]
+pub enum AutoAction {
+    /// Install udev rule for automatic switching and apply immediately
+    Enable,
+    /// Remove udev rule and stop automatic switching
+    Disable,
+    /// Show auto-switching status
+    Status,
 }
 
 #[derive(Subcommand)]

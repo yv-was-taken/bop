@@ -100,6 +100,12 @@ fn create_framework16_fixture(root: &Path) {
     fs::write(bat.join("voltage_now"), "15800000\n").unwrap();
     fs::write(bat.join("cycle_count"), "120\n").unwrap();
 
+    // AC adapter (on battery by default for the "before" state)
+    let ac = root.join("sys/class/power_supply/ACAD");
+    fs::create_dir_all(&ac).unwrap();
+    fs::write(ac.join("type"), "Mains\n").unwrap();
+    fs::write(ac.join("online"), "0\n").unwrap();
+
     // PCI devices (a few with suboptimal runtime PM)
     let pci_base = root.join("sys/bus/pci/devices");
     let aspm = root.join("sys/module/pcie_aspm/parameters");
@@ -1504,4 +1510,64 @@ fn test_snapshot_build_plan_aggressive() {
             .any(|w| w.path.contains("boost") && w.value == "0"),
         "Aggressive mode should disable CPU boost"
     );
+}
+
+// ---- AC adapter detection tests ----
+
+#[test]
+fn test_ac_detection_on_battery() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+    // Fixture has ACAD with online=0 (on battery)
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+
+    assert!(hw.ac.found, "Should detect AC adapter");
+    assert!(!hw.ac.online, "AC adapter should be offline");
+    assert!(hw.ac.is_on_battery());
+    assert!(!hw.ac.is_on_ac());
+    assert_eq!(hw.ac.supply_name.as_deref(), Some("ACAD"));
+}
+
+#[test]
+fn test_ac_detection_on_ac() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+    // Override AC adapter to online
+    fs::write(tmp.path().join("sys/class/power_supply/ACAD/online"), "1\n").unwrap();
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+
+    assert!(hw.ac.found);
+    assert!(hw.ac.online);
+    assert!(hw.ac.is_on_ac());
+    assert!(!hw.ac.is_on_battery());
+}
+
+#[test]
+fn test_ac_detection_no_adapter() {
+    let tmp = TempDir::new().unwrap();
+
+    // Minimal sysfs with only a battery, no mains adapter
+    let dmi = tmp.path().join("sys/class/dmi/id");
+    fs::create_dir_all(&dmi).unwrap();
+    fs::write(dmi.join("board_vendor"), "TestVendor\n").unwrap();
+
+    let bat = tmp.path().join("sys/class/power_supply/BAT0");
+    fs::create_dir_all(&bat).unwrap();
+    fs::write(bat.join("type"), "Battery\n").unwrap();
+    fs::write(bat.join("present"), "1\n").unwrap();
+
+    fs::create_dir_all(tmp.path().join("proc")).unwrap();
+    fs::write(tmp.path().join("proc/cpuinfo"), "processor\t: 0\n").unwrap();
+    fs::write(tmp.path().join("proc/cmdline"), "\n").unwrap();
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+
+    assert!(!hw.ac.found, "No AC adapter should be found");
+    assert!(!hw.ac.is_on_ac());
+    assert!(!hw.ac.is_on_battery());
 }

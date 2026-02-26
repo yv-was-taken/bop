@@ -337,6 +337,7 @@ fn capture_power_supply(
 
         for file in &[
             "type",
+            "online",
             "present",
             "status",
             "capacity",

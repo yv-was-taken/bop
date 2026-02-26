@@ -1,3 +1,4 @@
+pub mod ac;
 pub mod battery;
 pub mod cpu;
 pub mod dmi;
@@ -15,6 +16,7 @@ pub struct HardwareInfo {
     pub cpu: cpu::CpuInfo,
     pub gpu: gpu::GpuInfo,
     pub battery: battery::BatteryInfo,
+    pub ac: ac::AcInfo,
     pub pci: pci::PciInfo,
     pub network: network::NetworkInfo,
     pub platform: platform::PlatformInfo,
@@ -30,6 +32,7 @@ impl HardwareInfo {
             cpu: cpu::CpuInfo::detect(sysfs),
             gpu: gpu::GpuInfo::detect(sysfs),
             battery: battery::BatteryInfo::detect(sysfs),
+            ac: ac::AcInfo::detect(sysfs),
             pci: pci::PciInfo::detect(sysfs),
             network: network::NetworkInfo::detect(sysfs),
             platform: platform::PlatformInfo::detect(sysfs),

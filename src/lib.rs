@@ -1,5 +1,6 @@
 pub mod apply;
 pub mod audit;
+pub mod auto;
 pub mod cli;
 pub mod detect;
 pub mod error;
