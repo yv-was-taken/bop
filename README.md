@@ -6,7 +6,7 @@ Built for Framework Laptop 16 (AMD Ryzen 7040). Single binary, no daemon, no con
 
 ## Why not TLP?
 
-Framework and AMD engineers [explicitly recommend against TLP on AMD systems](https://community.frame.work/t/tracking-linux-battery-life-tuning/). TLP's default config is tuned for Intel and actively fights `amd-pstate`. bop is built for AMD first, applies settings as a one-shot rather than running a daemon, and knows about Framework-specific hardware (expansion card USB controllers, CrosEC, etc.).
+Framework and AMD engineers [explicitly recommend against TLP on AMD systems](https://community.frame.work/t/tracking-ppd-v-tlp-for-amd-ryzen-7040/39423). TLP's default config is tuned for Intel and actively fights `amd-pstate`. bop is built for AMD first, applies settings as a one-shot rather than running a daemon, and knows about Framework-specific hardware (expansion card USB controllers, CrosEC, etc.).
 
 ## What it does
 
@@ -48,7 +48,7 @@ Audit Findings
   Power Optimization Score: 51/100
 ```
 
-Conservative estimate: fixing these issues saves 4-8W, potentially doubling battery life from 5-6 hours to 8-12 hours on light use.
+On a Framework 16 (7940HS, 61Wh battery, ~50% brightness, light browsing/coding), fixing these issues typically saves 4-8W, extending battery life from ~5-6 hours to ~8-12 hours. Your results will vary with workload, brightness, and expansion card configuration.
 
 ## Install
 
@@ -93,7 +93,7 @@ JSON output is available for all commands with `--json`.
 | ASPM policy | `default` | `powersupersave` | Adds ~2-10us wake latency on first PCI access. Imperceptible. |
 | PCI runtime PM | `on` (36 devices) | `auto` (all) | Idle devices enter low-power state. No practical downside. |
 | WiFi power save | `off` | `on` | ~50-200ms latency on first packet after idle. |
-| ACPI wakeup | 10 sources enabled | 1 (XHC0 only) | Volatile, resets on reboot. Keyboard/lid/power button still work. |
+| ACPI wakeup | 10 sources enabled | 1 (XHC0 only) | Volatile, resets on reboot. Keyboard/lid/power button still work. Run `bop wake list` to verify for your firmware/expansion card config. |
 
 ### Boot-persistent (require reboot)
 
@@ -112,7 +112,7 @@ JSON output is available for all commands with `--json`.
 
 ### Persistence
 
-bop generates a `bop-powersave.service` (systemd oneshot) that re-applies runtime sysfs settings and ACPI wakeup configuration on every boot. Kernel parameters are written to systemd-boot loader entries.
+bop generates a `bop-powersave.service` (systemd oneshot) that re-applies runtime sysfs settings and ACPI wakeup configuration on every boot. Kernel parameters are written to systemd-boot loader entries. Only systemd-boot is currently supported; GRUB and rEFInd users must add kernel parameters manually.
 
 All changes are recorded in `/var/lib/bop/state.json`. Running `sudo bop revert` restores everything to the original state.
 

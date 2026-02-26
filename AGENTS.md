@@ -25,7 +25,7 @@ Add tests for every behavior change, especially policy decisions and parser/sysf
 Avoid tests that depend on the host machine’s live `/sys` or `/proc`; use temporary mock trees like `tests/sysfs_mock.rs`. There is no strict coverage gate today, but bug fixes should include a regression test.
 
 ## Commit & Pull Request Guidelines
-Current history is small but uses descriptive, imperative commit subjects (example: `Initial implementation of bop - Battery Optimization Project`). Keep subjects concise and scoped when possible, e.g., `audit: flag disabled wifi powersave`.
+Use descriptive, imperative commit subjects scoped to the changed area, e.g., `audit: flag disabled wifi powersave` or `apply: roll back partial kernel param writes on failure`.
 
 PRs should include:
 - What changed and why.

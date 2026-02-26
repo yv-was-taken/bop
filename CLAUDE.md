@@ -63,7 +63,7 @@ This enables testing detection, profile matching, audit checks, and scoring with
 
 - **Never merge PRs or push directly to master** unless the user explicitly says to merge. Always create PRs for review.
 - When creating PRs, sort by code significance: correctness bugs first, then data-loss bugs, then behavioral fixes.
-- Use `git worktree` for parallel fix branches. Worktrees live at `/home/ywvlfy/Projects/bop/<branch-name>/`.
+- Use `git worktree` for parallel fix branches. Worktrees live at `~/Projects/bop/<branch-name>/`.
 - Commit subjects: descriptive, imperative, scoped when possible (e.g., `audit: flag disabled wifi powersave`).
 
 ## Key Details
