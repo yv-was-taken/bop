@@ -62,6 +62,9 @@ cargo install --path .
 # Scan your system and see what's wrong
 bop audit
 
+# Check if applied optimizations are still active
+bop status
+
 # See exactly what would change (no root required)
 bop apply --dry-run
 
