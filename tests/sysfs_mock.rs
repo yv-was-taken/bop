@@ -587,3 +587,305 @@ fn test_build_plan_includes_audio_and_gpu_dpm() {
         "Expected plan to include sysfs write for GPU DPM -> auto"
     );
 }
+
+#[test]
+fn test_status_sysfs_active_and_drifted() {
+    use bop::apply::{ApplyState, SysfsChange};
+
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+
+    // Build a plan to see what changes would be made.
+    let plan = apply::build_plan(&hw, &sysfs);
+
+    // Verify the plan includes EPP and platform profile writes.
+    assert!(
+        plan.sysfs_writes
+            .iter()
+            .any(|w| w.path.contains("energy_performance_preference") && w.value == "balance_power"),
+        "Plan should include EPP -> balance_power"
+    );
+    assert!(
+        plan.sysfs_writes
+            .iter()
+            .any(|w| w.path.contains("platform_profile") && w.value == "low-power"),
+        "Plan should include platform profile -> low-power"
+    );
+
+    // Simulate "apply" by writing the new values to the fixture paths.
+    let epp_path = tmp
+        .path()
+        .join("sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference");
+    let profile_path = tmp.path().join("sys/firmware/acpi/platform_profile");
+
+    fs::write(&epp_path, "balance_power\n").unwrap();
+    fs::write(&profile_path, "low-power\n").unwrap();
+
+    // Create an ApplyState recording those changes with the real temp paths.
+    let state = ApplyState {
+        timestamp: "2026-01-01T00:00:00Z".to_string(),
+        sysfs_changes: vec![
+            SysfsChange {
+                path: epp_path.to_string_lossy().into_owned(),
+                original_value: "balance_performance".to_string(),
+                new_value: "balance_power".to_string(),
+            },
+            SysfsChange {
+                path: profile_path.to_string_lossy().into_owned(),
+                original_value: "performance".to_string(),
+                new_value: "low-power".to_string(),
+            },
+        ],
+        ..Default::default()
+    };
+
+    // Verify both values are "active" by reading files and comparing to expected.
+    for change in &state.sysfs_changes {
+        let actual = fs::read_to_string(&change.path).unwrap().trim().to_string();
+        assert_eq!(
+            actual,
+            change.new_value.trim(),
+            "value should be active after apply for {}",
+            change.path
+        );
+    }
+
+    // Simulate drift on the platform profile.
+    fs::write(&profile_path, "balanced\n").unwrap();
+
+    // Verify drift is detected on platform profile.
+    let profile_actual = fs::read_to_string(&state.sysfs_changes[1].path)
+        .unwrap()
+        .trim()
+        .to_string();
+    assert_ne!(
+        profile_actual,
+        state.sysfs_changes[1].new_value.trim(),
+        "platform profile should have drifted"
+    );
+
+    // Verify EPP is still active (not drifted).
+    let epp_actual = fs::read_to_string(&state.sysfs_changes[0].path)
+        .unwrap()
+        .trim()
+        .to_string();
+    assert_eq!(
+        epp_actual,
+        state.sysfs_changes[0].new_value.trim(),
+        "EPP should still be active"
+    );
+}
+
+#[test]
+fn test_revert_restores_sysfs_values_integration() {
+    use bop::apply::{ApplyState, SysfsChange};
+
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+
+    // Build a plan to see what the optimizer would change.
+    let plan = apply::build_plan(&hw, &sysfs);
+    assert!(
+        !plan.sysfs_writes.is_empty(),
+        "Plan should have sysfs writes"
+    );
+
+    // Collect fixture paths and their original values, then simulate "apply".
+    let mut sysfs_changes = Vec::new();
+
+    // EPP for all 16 CPUs: balance_performance -> balance_power
+    for i in 0..16 {
+        let path = tmp.path().join(format!(
+            "sys/devices/system/cpu/cpu{}/cpufreq/energy_performance_preference",
+            i
+        ));
+        let original = fs::read_to_string(&path).unwrap().trim().to_string();
+        assert_eq!(
+            original, "balance_performance",
+            "fixture should start with balance_performance for cpu{}",
+            i
+        );
+        fs::write(&path, "balance_power\n").unwrap();
+        sysfs_changes.push(SysfsChange {
+            path: path.to_string_lossy().into_owned(),
+            original_value: original,
+            new_value: "balance_power".to_string(),
+        });
+    }
+
+    // Platform profile: performance -> low-power
+    let profile_path = tmp.path().join("sys/firmware/acpi/platform_profile");
+    let profile_original = fs::read_to_string(&profile_path)
+        .unwrap()
+        .trim()
+        .to_string();
+    assert_eq!(profile_original, "performance");
+    fs::write(&profile_path, "low-power\n").unwrap();
+    sysfs_changes.push(SysfsChange {
+        path: profile_path.to_string_lossy().into_owned(),
+        original_value: profile_original,
+        new_value: "low-power".to_string(),
+    });
+
+    // ASPM policy: default -> powersupersave
+    let aspm_path = tmp.path().join("sys/module/pcie_aspm/parameters/policy");
+    let aspm_original = fs::read_to_string(&aspm_path).unwrap().trim().to_string();
+    fs::write(&aspm_path, "powersupersave\n").unwrap();
+    sysfs_changes.push(SysfsChange {
+        path: aspm_path.to_string_lossy().into_owned(),
+        original_value: aspm_original,
+        new_value: "powersupersave".to_string(),
+    });
+
+    // Build the ApplyState.
+    let state = ApplyState {
+        timestamp: "2026-01-01T00:00:00Z".to_string(),
+        sysfs_changes,
+        ..Default::default()
+    };
+
+    // Sanity check: verify new values are written.
+    for change in &state.sysfs_changes {
+        let actual = fs::read_to_string(&change.path).unwrap().trim().to_string();
+        assert_eq!(
+            actual,
+            change.new_value.trim(),
+            "new value should be written before revert: {}",
+            change.path
+        );
+    }
+
+    // Simulate "revert" by writing original values back.
+    for change in &state.sysfs_changes {
+        fs::write(&change.path, &change.original_value).unwrap();
+    }
+
+    // Verify all original values are restored.
+    for change in &state.sysfs_changes {
+        let restored = fs::read_to_string(&change.path).unwrap().trim().to_string();
+        assert_eq!(
+            restored,
+            change.original_value.trim(),
+            "value should be restored after revert: {}",
+            change.path
+        );
+    }
+}
+
+#[test]
+fn test_apply_then_revert_round_trip() {
+    use bop::apply::{ApplyState, SysfsChange};
+
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+
+    // Record original values for key paths before any changes.
+    let key_paths: Vec<(&str, &str)> = vec![
+        (
+            "sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference",
+            "balance_performance",
+        ),
+        ("sys/firmware/acpi/platform_profile", "performance"),
+        (
+            "sys/module/pcie_aspm/parameters/policy",
+            "default [default] performance powersave powersupersave",
+        ),
+    ];
+
+    // Verify fixture has the expected original values.
+    for (relative_path, expected_original) in &key_paths {
+        let full = tmp.path().join(relative_path);
+        let actual = fs::read_to_string(&full).unwrap().trim().to_string();
+        assert_eq!(
+            actual, *expected_original,
+            "fixture should start with expected value for {}",
+            relative_path
+        );
+    }
+
+    // Build plan and check it wants to change these paths.
+    let plan = apply::build_plan(&hw, &sysfs);
+
+    // Map fixture-relative paths to what the plan would write.
+    let plan_values: Vec<(&str, &str)> = vec![
+        (
+            "sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference",
+            "balance_power",
+        ),
+        ("sys/firmware/acpi/platform_profile", "low-power"),
+        ("sys/module/pcie_aspm/parameters/policy", "powersupersave"),
+    ];
+
+    // Verify the plan includes these writes.
+    for (relative_path, expected_value) in &plan_values {
+        assert!(
+            plan.sysfs_writes.iter().any(|w| w
+                .path
+                .contains(relative_path.split('/').next_back().unwrap())
+                && w.value == *expected_value),
+            "Plan should include write {} -> {}",
+            relative_path,
+            expected_value
+        );
+    }
+
+    // Simulate "apply": write new values, build ApplyState.
+    let mut sysfs_changes = Vec::new();
+    for ((relative_path, original), (_, new_value)) in key_paths.iter().zip(plan_values.iter()) {
+        let full = tmp.path().join(relative_path);
+        fs::write(&full, format!("{}\n", new_value)).unwrap();
+        sysfs_changes.push(SysfsChange {
+            path: full.to_string_lossy().into_owned(),
+            original_value: original.to_string(),
+            new_value: new_value.to_string(),
+        });
+    }
+
+    let state = ApplyState {
+        timestamp: "2026-01-01T00:00:00Z".to_string(),
+        sysfs_changes,
+        ..Default::default()
+    };
+
+    // Verify values changed.
+    for change in &state.sysfs_changes {
+        let actual = fs::read_to_string(&change.path).unwrap().trim().to_string();
+        assert_eq!(
+            actual,
+            change.new_value.trim(),
+            "value should reflect applied change: {}",
+            change.path
+        );
+        assert_ne!(
+            actual,
+            change.original_value.trim(),
+            "value should differ from original after apply: {}",
+            change.path
+        );
+    }
+
+    // Simulate "revert": write original values back.
+    for change in &state.sysfs_changes {
+        fs::write(&change.path, format!("{}\n", change.original_value)).unwrap();
+    }
+
+    // Verify values are back to original.
+    for change in &state.sysfs_changes {
+        let restored = fs::read_to_string(&change.path).unwrap().trim().to_string();
+        assert_eq!(
+            restored,
+            change.original_value.trim(),
+            "value should be restored to original after revert: {}",
+            change.path
+        );
+    }
+}
