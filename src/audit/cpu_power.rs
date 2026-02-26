@@ -108,17 +108,19 @@ pub fn check(hw: &HardwareInfo) -> Vec<Finding> {
                 );
             }
             "balanced" => {
+                // Balanced is a reasonable default; low-power trades sustained
+                // performance for power savings — a user preference, not a bug.
                 findings.push(
                     Finding::new(
-                        Severity::Low,
+                        Severity::Info,
                         "CPU",
-                        "Platform profile at balanced - could save more on battery",
+                        "Platform profile at balanced — low-power saves ~0.5-1W but throttles more",
                     )
                     .current("balanced")
-                    .recommended("low-power")
-                    .impact("~0.5-1W savings")
+                    .recommended("low-power (trades sustained performance for battery)")
+                    .impact("~0.5-1W savings with lower TDP cap")
                     .path("/sys/firmware/acpi/platform_profile")
-                    .weight(3),
+                    .weight(0),
                 );
             }
             "low-power" => {

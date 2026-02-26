@@ -180,12 +180,15 @@ pub fn build_plan(hw: &HardwareInfo, sysfs: &SysfsRoot) -> ApplyPlan {
         });
     }
 
-    // ASPM -> powersupersave
-    if hw.pci.aspm_policy.as_deref() != Some("powersupersave") {
+    // ASPM -> powersave (safe default; powersupersave can cause WiFi/NVMe issues)
+    if !matches!(
+        hw.pci.aspm_policy.as_deref(),
+        Some("powersave" | "powersupersave")
+    ) {
         plan.sysfs_writes.push(PlannedSysfsWrite {
             path: "/sys/module/pcie_aspm/parameters/policy".to_string(),
-            value: "powersupersave".to_string(),
-            description: "Set PCIe ASPM policy to powersupersave".to_string(),
+            value: "powersave".to_string(),
+            description: "Set PCIe ASPM policy to powersave".to_string(),
         });
     }
 
@@ -200,7 +203,7 @@ pub fn build_plan(hw: &HardwareInfo, sysfs: &SysfsRoot) -> ApplyPlan {
         }
     }
 
-    // USB autosuspend -> auto
+    // USB autosuspend -> auto (skip input devices and expansion cards)
     if let Ok(devices) = sysfs.list_dir("sys/bus/usb/devices") {
         for device in devices {
             if device.contains(':') {
@@ -210,6 +213,24 @@ pub fn build_plan(hw: &HardwareInfo, sysfs: &SysfsRoot) -> ApplyPlan {
             if let Some(val) = sysfs.read_optional(&path).unwrap_or(None)
                 && val != "auto"
             {
+                let product = sysfs
+                    .read_optional(format!("sys/bus/usb/devices/{}/product", device))
+                    .unwrap_or(None)
+                    .unwrap_or_default()
+                    .to_lowercase();
+
+                let is_input = product.contains("keyboard")
+                    || product.contains("mouse")
+                    || product.contains("trackpad")
+                    || product.contains("touchpad");
+                let is_expansion = product.contains("expansion")
+                    || product.contains("displayport")
+                    || product.contains("hdmi");
+
+                if is_input || is_expansion {
+                    continue;
+                }
+
                 plan.sysfs_writes.push(PlannedSysfsWrite {
                     path: format!("/{}", path),
                     value: "auto".to_string(),

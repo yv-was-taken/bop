@@ -734,14 +734,14 @@ fn test_revert_restores_sysfs_values_integration() {
         new_value: "low-power".to_string(),
     });
 
-    // ASPM policy: default -> powersupersave
+    // ASPM policy: default -> powersave
     let aspm_path = tmp.path().join("sys/module/pcie_aspm/parameters/policy");
     let aspm_original = fs::read_to_string(&aspm_path).unwrap().trim().to_string();
-    fs::write(&aspm_path, "powersupersave\n").unwrap();
+    fs::write(&aspm_path, "powersave\n").unwrap();
     sysfs_changes.push(SysfsChange {
         path: aspm_path.to_string_lossy().into_owned(),
         original_value: aspm_original,
-        new_value: "powersupersave".to_string(),
+        new_value: "powersave".to_string(),
     });
 
     // Build the ApplyState.
@@ -823,7 +823,7 @@ fn test_apply_then_revert_round_trip() {
             "balance_power",
         ),
         ("sys/firmware/acpi/platform_profile", "low-power"),
-        ("sys/module/pcie_aspm/parameters/policy", "powersupersave"),
+        ("sys/module/pcie_aspm/parameters/policy", "powersave"),
     ];
 
     // Verify the plan includes these writes.
@@ -1235,7 +1235,7 @@ fn test_generic_laptop_audit_runs_generic_checks() {
         "Should detect suboptimal EPP on generic laptop"
     );
 
-    // Should flag ASPM not set to powersupersave
+    // Should flag ASPM not set to powersave
     assert!(
         findings.iter().any(|f| f.description.contains("ASPM")),
         "Should detect suboptimal ASPM on generic laptop"

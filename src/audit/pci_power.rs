@@ -5,6 +5,9 @@ pub fn check(hw: &HardwareInfo) -> Vec<Finding> {
     let mut findings = Vec::new();
 
     // Check ASPM policy
+    // powersave (L0s + L1) is the safe default; powersupersave (L1.1/L1.2) can
+    // cause WiFi dropouts and NVMe stutter on some hardware, so it's reserved
+    // for aggressive mode.
     if let Some(ref policy) = hw.pci.aspm_policy {
         match policy.as_str() {
             "default" => {
@@ -12,10 +15,10 @@ pub fn check(hw: &HardwareInfo) -> Vec<Finding> {
                     Finding::new(
                         Severity::Medium,
                         "PCIe",
-                        "ASPM policy at 'default' - not using deepest link sleep states",
+                        "ASPM policy at 'default' - not using link sleep states",
                     )
                     .current("default")
-                    .recommended("powersupersave")
+                    .recommended("powersave")
                     .impact("~0.5-1W savings from PCIe link power management")
                     .path("/sys/module/pcie_aspm/parameters/policy")
                     .weight(6),
@@ -29,27 +32,13 @@ pub fn check(hw: &HardwareInfo) -> Vec<Finding> {
                         "ASPM disabled (performance mode) - PCIe links always active",
                     )
                     .current("performance")
-                    .recommended("powersupersave")
+                    .recommended("powersave")
                     .impact("~1-2W savings from PCIe link power management")
                     .path("/sys/module/pcie_aspm/parameters/policy")
                     .weight(8),
                 );
             }
-            "powersave" => {
-                findings.push(
-                    Finding::new(
-                        Severity::Low,
-                        "PCIe",
-                        "ASPM at powersave - powersupersave enables L1.1/L1.2 substates",
-                    )
-                    .current("powersave")
-                    .recommended("powersupersave")
-                    .impact("~0.2-0.5W additional savings")
-                    .path("/sys/module/pcie_aspm/parameters/policy")
-                    .weight(3),
-                );
-            }
-            "powersupersave" => {
+            "powersave" | "powersupersave" => {
                 // Optimal
             }
             _ => {}
