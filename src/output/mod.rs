@@ -1,5 +1,6 @@
 use crate::audit::{Finding, Severity};
 use crate::detect::HardwareInfo;
+use crate::status::StatusReport;
 use colored::Colorize;
 
 const LABEL_W: usize = 18;
@@ -190,4 +191,136 @@ pub fn print_audit_json(hw: &HardwareInfo, findings: &[Finding], score: u32, pro
     });
 
     println!("{}", serde_json::to_string_pretty(&output).unwrap());
+}
+
+pub fn print_status(report: &StatusReport) {
+    println!(
+        "{} (applied {})",
+        "bop status".bold(),
+        report.timestamp.dimmed()
+    );
+    println!();
+
+    // Sysfs
+    if !report.sysfs.is_empty() {
+        let active = report.sysfs.iter().filter(|s| s.active).count();
+        let total = report.sysfs.len();
+        println!(
+            "  {} Sysfs Optimizations ({}/{})",
+            ">>".cyan(),
+            active,
+            total
+        );
+        for s in &report.sysfs {
+            if s.active {
+                println!("     {} {}  {}", "✓".green(), s.path.dimmed(), s.expected);
+            } else if let Some(actual) = &s.actual {
+                println!("     {} {}", "✗".red(), s.path);
+                println!(
+                    "       expected: {}  actual: {}",
+                    s.expected.green(),
+                    actual.red()
+                );
+            } else {
+                println!("     {} {}  (path not found)", "?".yellow(), s.path);
+            }
+        }
+        println!();
+    }
+
+    // ACPI wakeup
+    if !report.acpi_wakeup.is_empty() {
+        let active = report.acpi_wakeup.iter().filter(|w| w.active).count();
+        let total = report.acpi_wakeup.len();
+        println!(
+            "  {} ACPI Wakeup ({}/{} disabled)",
+            ">>".cyan(),
+            active,
+            total
+        );
+        for w in &report.acpi_wakeup {
+            if w.active {
+                println!("     {} {} disabled", "✓".green(), w.device);
+            } else {
+                println!("     {} {} re-enabled (drifted)", "✗".red(), w.device);
+            }
+        }
+        println!();
+    }
+
+    // Kernel params
+    if !report.kernel_params.is_empty() {
+        let active = report.kernel_params.iter().filter(|k| k.in_cmdline).count();
+        let total = report.kernel_params.len();
+        println!(
+            "  {} Kernel Parameters ({}/{})",
+            ">>".cyan(),
+            active,
+            total
+        );
+        for k in &report.kernel_params {
+            if k.in_cmdline {
+                println!("     {} {}", "✓".green(), k.param);
+            } else {
+                println!("     {} {} (pending reboot)", "⏳".yellow(), k.param);
+            }
+        }
+        println!();
+    }
+
+    // Services
+    if !report.services.is_empty() {
+        let active = report.services.iter().filter(|s| s.still_stopped).count();
+        let total = report.services.len();
+        println!(
+            "  {} Services ({}/{} stopped)",
+            ">>".cyan(),
+            active,
+            total
+        );
+        for s in &report.services {
+            if s.still_stopped {
+                println!("     {} {} stopped", "✓".green(), s.name);
+            } else {
+                println!("     {} {} running (drifted)", "✗".red(), s.name);
+            }
+        }
+        println!();
+    }
+
+    // Systemd unit
+    if let Some(unit) = &report.systemd_unit {
+        println!("  {} Systemd Persistence", ">>".cyan());
+        if unit.exists {
+            println!("     {} {} installed", "✓".green(), unit.path);
+        } else {
+            println!("     {} {} missing", "✗".red(), unit.path);
+        }
+        println!();
+    }
+
+    // Summary
+    let active = report.active_count();
+    let total = report.total_count();
+    let drifted = report.drifted_count();
+    if drifted == 0 {
+        println!(
+            "  {}",
+            format!("All {total} optimizations active.").green().bold()
+        );
+    } else {
+        println!(
+            "  {}",
+            format!("{active}/{total} optimizations active, {drifted} drifted")
+                .yellow()
+                .bold()
+        );
+    }
+}
+
+pub fn print_status_json(report: &StatusReport) {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(report).unwrap()
+    );
 }
