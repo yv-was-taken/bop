@@ -44,7 +44,17 @@ ThinkPad X1 Carbon Gen 11
 
 Write these down -- you'll use them in your `matches()` implementation and test fixture.
 
-### 2. Create the profile file
+### 2. Capture a system snapshot
+
+Run `bop snapshot` on your laptop to capture every sysfs/procfs path that bop reads (DMI, CPU, GPU, PCI, USB, battery, audio, network, kernel params, ACPI wakeup, sysctl):
+
+```bash
+sudo bop snapshot -o my-laptop.json
+```
+
+Include the resulting JSON file in your PR at `tests/fixtures/<name>.json` (e.g., `tests/fixtures/thinkpad-x1c11.json`). This snapshot replaces the need to hand-write a full fixture function -- it can be loaded in tests to recreate a complete mock sysfs tree automatically.
+
+### 3. Create the profile file
 
 Create `src/profile/<your_laptop>.rs`. Here's a minimal template:
 
@@ -91,7 +101,7 @@ impl HardwareProfile for ThinkpadX1Carbon11 {
 }
 ```
 
-### 3. Register it in the profile module
+### 4. Register it in the profile module
 
 Edit `src/profile/mod.rs`:
 
@@ -111,7 +121,7 @@ pub fn all_profiles() -> Vec<Box<dyn HardwareProfile>> {
 
 Profiles are checked in order. Put more specific profiles (e.g., a particular CPU variant) before more general ones.
 
-### 4. Optional: add DMI helper methods
+### 5. Optional: add DMI helper methods
 
 If you want reusable detection logic, add methods to `DmiInfo` in `src/detect/dmi.rs`:
 
@@ -154,45 +164,24 @@ All checks live in `src/audit/` and have one of three signatures:
 
 ## Testing
 
-Tests use a mock sysfs fixture so you don't need root or real hardware. See `tests/sysfs_mock.rs` for the full example.
+Tests use a mock sysfs tree so you don't need root or real hardware. The easiest way is to load the snapshot you captured in step 2.
 
-### Create a fixture for your laptop
+### Using a snapshot (recommended)
 
-Add a fixture function in `tests/sysfs_mock.rs` (or a new test file):
-
-```rust
-fn create_thinkpad_x1c11_fixture(root: &Path) {
-    // DMI
-    let dmi = root.join("sys/class/dmi/id");
-    fs::create_dir_all(&dmi).unwrap();
-    fs::write(dmi.join("board_vendor"), "LENOVO\n").unwrap();
-    fs::write(dmi.join("board_name"), "21HMCTO1WW\n").unwrap();
-    fs::write(dmi.join("product_name"), "ThinkPad X1 Carbon Gen 11\n").unwrap();
-    fs::write(dmi.join("product_family"), "ThinkPad X1 Carbon Gen 11\n").unwrap();
-    fs::write(dmi.join("bios_version"), "1.20\n").unwrap();
-
-    // CPU (Intel example)
-    let cpu_base = root.join("sys/devices/system/cpu");
-    fs::create_dir_all(cpu_base.join("cpufreq")).unwrap();
-
-    let cpuinfo = "processor\t: 0\nvendor_id\t: GenuineIntel\ncpu family\t: 6\nmodel\t\t: 186\nmodel name\t: 13th Gen Intel(R) Core(TM) i7-1365U\n\n";
-    fs::create_dir_all(root.join("proc")).unwrap();
-    fs::write(root.join("proc/cpuinfo"), cpuinfo).unwrap();
-
-    // ... add CPU entries, battery, PCI, etc. as needed
-    // Use the Framework 16 fixture as a reference for what paths to populate.
-}
-```
-
-### Write tests for detection and profile matching
+Load your snapshot file and call `materialize()` to recreate the full sysfs tree in a temp directory:
 
 ```rust
+use bop::snapshot::Snapshot;
+use bop::sysfs::SysfsRoot;
+use bop::detect::HardwareInfo;
+use tempfile::TempDir;
+use std::path::Path;
+
 #[test]
 fn test_thinkpad_x1c11_detection() {
+    let snap = Snapshot::load(Path::new("tests/fixtures/thinkpad-x1c11.json")).unwrap();
     let tmp = TempDir::new().unwrap();
-    create_thinkpad_x1c11_fixture(tmp.path());
-
-    let sysfs = SysfsRoot::new(tmp.path());
+    let sysfs = snap.materialize(tmp.path()).unwrap();
     let hw = HardwareInfo::detect(&sysfs);
 
     assert!(hw.dmi.board_vendor.as_deref().unwrap().contains("LENOVO"));
@@ -200,17 +189,33 @@ fn test_thinkpad_x1c11_detection() {
 
 #[test]
 fn test_thinkpad_x1c11_profile_matches() {
+    let snap = Snapshot::load(Path::new("tests/fixtures/thinkpad-x1c11.json")).unwrap();
     let tmp = TempDir::new().unwrap();
-    create_thinkpad_x1c11_fixture(tmp.path());
-
-    let sysfs = SysfsRoot::new(tmp.path());
+    let sysfs = snap.materialize(tmp.path()).unwrap();
     let hw = HardwareInfo::detect(&sysfs);
 
-    let profile = profile::detect_profile(&hw);
+    let profile = bop::profile::detect_profile(&hw);
     assert!(profile.is_some());
     assert_eq!(profile.unwrap().name(), "Lenovo ThinkPad X1 Carbon Gen 11 (Intel)");
 }
 ```
+
+### Hand-written fixtures (alternative)
+
+If you don't have the hardware and want a minimal, targeted fixture, you can write one manually. See `tests/sysfs_mock.rs` for a full example.
+
+```rust
+fn create_thinkpad_x1c11_fixture(root: &Path) {
+    let dmi = root.join("sys/class/dmi/id");
+    fs::create_dir_all(&dmi).unwrap();
+    fs::write(dmi.join("board_vendor"), "LENOVO\n").unwrap();
+    fs::write(dmi.join("board_name"), "21HMCTO1WW\n").unwrap();
+    fs::write(dmi.join("product_name"), "ThinkPad X1 Carbon Gen 11\n").unwrap();
+    // ... add CPU, battery, PCI entries as needed
+}
+```
+
+This approach is useful when you only need to test specific detection or audit paths without a full system capture.
 
 ### Run tests
 
@@ -237,6 +242,6 @@ Run all four before submitting a PR. CI will reject code with clippy warnings or
 - [ ] Profile registered in `src/profile/mod.rs` (both `mod` declaration and `all_profiles()`)
 - [ ] `matches()` uses DMI strings that uniquely identify your laptop
 - [ ] `audit()` includes all generic checks plus any hardware-specific ones
-- [ ] Test fixture created with realistic sysfs data from your laptop
+- [ ] Snapshot file included at `tests/fixtures/<name>.json`
 - [ ] Tests pass for detection, profile matching, and at least one audit check
 - [ ] `cargo clippy` and `cargo fmt` pass cleanly
