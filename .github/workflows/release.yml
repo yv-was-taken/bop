@@ -1,0 +1,46 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Build and Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Strip binary
+        run: strip target/release/bop
+
+      - name: Create tarball
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          ARCHIVE="bop-${TAG}-x86_64-linux.tar.gz"
+          STAGING="$(mktemp -d)"
+          cp target/release/bop LICENSE README.md "${STAGING}/"
+          tar czf "${ARCHIVE}" -C "${STAGING}" bop LICENSE README.md
+          echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            "${ARCHIVE}" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes
