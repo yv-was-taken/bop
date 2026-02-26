@@ -200,6 +200,62 @@ pub fn build_plan(hw: &HardwareInfo, sysfs: &SysfsRoot) -> ApplyPlan {
         }
     }
 
+    // USB autosuspend -> auto
+    if let Ok(devices) = sysfs.list_dir("sys/bus/usb/devices") {
+        for device in devices {
+            if device.contains(':') {
+                continue;
+            }
+            let path = format!("sys/bus/usb/devices/{}/power/control", device);
+            if let Some(val) = sysfs.read_optional(&path).unwrap_or(None)
+                && val != "auto"
+            {
+                plan.sysfs_writes.push(PlannedSysfsWrite {
+                    path: format!("/{}", path),
+                    value: "auto".to_string(),
+                    description: format!("Enable autosuspend for USB {}", device),
+                });
+            }
+        }
+    }
+
+    // Audio power save
+    if let Some(val) = sysfs
+        .read_optional("sys/module/snd_hda_intel/parameters/power_save")
+        .unwrap_or(None)
+        && val != "1"
+    {
+        plan.sysfs_writes.push(PlannedSysfsWrite {
+            path: "/sys/module/snd_hda_intel/parameters/power_save".to_string(),
+            value: "1".to_string(),
+            description: "Set HDA audio power save timeout to 1 second".to_string(),
+        });
+    }
+    if let Some(val) = sysfs
+        .read_optional("sys/module/snd_hda_intel/parameters/power_save_controller")
+        .unwrap_or(None)
+        && val == "N"
+    {
+        plan.sysfs_writes.push(PlannedSysfsWrite {
+            path: "/sys/module/snd_hda_intel/parameters/power_save_controller".to_string(),
+            value: "Y".to_string(),
+            description: "Enable HDA controller power save".to_string(),
+        });
+    }
+
+    // GPU DPM -> auto
+    if hw.gpu.is_amd()
+        && let Some(ref card_path) = hw.gpu.card_path
+        && let Some(ref dpm) = hw.gpu.dpm_level
+        && dpm != "auto"
+    {
+        plan.sysfs_writes.push(PlannedSysfsWrite {
+            path: format!("/{}/power_dpm_force_performance_level", card_path),
+            value: "auto".to_string(),
+            description: "Set GPU DPM to auto for dynamic power management".to_string(),
+        });
+    }
+
     // Kernel params
     if hw.kernel_param_value("acpi.ec_no_wakeup").as_deref() != Some("1") {
         plan.kernel_params.push("acpi.ec_no_wakeup=1".to_string());
