@@ -9,7 +9,7 @@ license=('MIT')
 depends=('iw')
 makedepends=('cargo')
 source=("$pkgname-$pkgver.tar.gz::https://github.com/yv-was-taken/bop/archive/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('949af27b1696d0188fd97942b18caf5652d49898aebcb1ff855b261f4e103c4b')
 
 prepare() {
     cd "$pkgname-$pkgver"
