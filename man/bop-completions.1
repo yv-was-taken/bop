@@ -1,0 +1,23 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH bop-completions 1  "completions " 
+.SH NAME
+bop\-completions \- Generate shell completions
+.SH SYNOPSIS
+\fBbop completions\fR [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fISHELL\fR] 
+.SH DESCRIPTION
+Generate shell completions
+.SH OPTIONS
+.TP
+\fB\-\-json\fR
+Output as JSON instead of formatted tables
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+[\fISHELL\fR]
+Shell to generate completions for (auto\-detected if omitted)
+.br
+
+.br
+[\fIpossible values: \fRbash, elvish, fish, powershell, zsh]
