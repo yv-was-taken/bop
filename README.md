@@ -48,12 +48,38 @@ Audit Findings
   Power Optimization Score: 51/100
 ```
 
+Additional checks include: amd-pstate driver not active (~2-5W), NVMe APST disabled (~0.5-1W), and discrete GPU not in D3cold (~5-8W).
+
 On a Framework 16 (7940HS, 61Wh battery, ~50% brightness, light browsing/coding), fixing these issues typically saves 4-8W, extending battery life from ~5-6 hours to ~8-12 hours. Your results will vary with workload, brightness, and expansion card configuration.
 
 ## Install
 
 ```bash
 cargo install --path .
+```
+
+### Arch Linux (AUR)
+
+```bash
+# With an AUR helper
+yay -S bop
+
+# Manual
+git clone https://aur.archlinux.org/bop.git
+cd bop && makepkg -si
+```
+
+### Man page
+
+```bash
+man bop
+```
+
+Man pages are installed automatically via the AUR package. For manual installs, generate with:
+
+```bash
+cargo run --bin manpage
+sudo install -Dm644 man/bop.1 /usr/share/man/man1/bop.1
 ```
 
 ## Usage
@@ -81,6 +107,12 @@ bop monitor
 bop wake list
 sudo bop wake scan          # auto-detect and configure
 sudo bop wake enable XHC1   # enable specific controller
+
+# Generate shell completions (auto-detects shell)
+bop completions
+
+# Or specify: bash, zsh, fish, elvish, powershell
+bop completions zsh
 ```
 
 JSON output is available for all commands with `--json`.
@@ -97,6 +129,9 @@ JSON output is available for all commands with `--json`.
 | PCI runtime PM | `on` (36 devices) | `auto` (all) | Idle devices enter low-power state. No practical downside. |
 | WiFi power save | `off` | `on` | ~50-200ms latency on first packet after idle. |
 | ACPI wakeup | 10 sources enabled | 1 (XHC0 only) | Volatile, resets on reboot. Keyboard/lid/power button still work. Run `bop wake list` to verify for your firmware/expansion card config. |
+| USB autosuspend | `on` (per device) | `auto` (all) | Idle USB devices enter low-power state. No practical downside. |
+| Audio power save | `0` (disabled) | `1` (1 second) | HDA codec powers down after 1s idle. May cause faint pop on wake. |
+| GPU DPM | `high`/`manual` | `auto` | GPU dynamically scales power. No downside for desktop/light use. |
 
 ### Boot-persistent (require reboot)
 
