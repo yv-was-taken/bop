@@ -156,8 +156,25 @@ fn cmd_revert() -> Result<()> {
     Ok(())
 }
 
-fn cmd_status(_json: bool) -> Result<()> {
-    println!("status: not yet implemented");
+fn cmd_status(json: bool) -> Result<()> {
+    let report = match bop::status::check()? {
+        Some(r) => r,
+        None => {
+            println!(
+                "{}",
+                "No optimizations applied. Run `sudo bop apply` to get started."
+                    .yellow()
+            );
+            return Ok(());
+        }
+    };
+
+    if json {
+        bop::output::print_status_json(&report);
+    } else {
+        bop::output::print_status(&report);
+    }
+
     Ok(())
 }
 
