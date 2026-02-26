@@ -123,12 +123,77 @@ fn cmd_apply(dry_run: bool) -> Result<()> {
 
     println!();
     println!("{}", "Applied successfully!".green().bold());
-    println!(
-        "  {} sysfs changes, {} kernel params, {} services disabled",
-        state.sysfs_changes.len(),
-        state.kernel_params_added.len(),
-        state.services_disabled.len()
-    );
+    // Categorize sysfs changes
+    let mut epp_count = 0usize;
+    let mut pci_count = 0usize;
+    let mut usb_count = 0usize;
+    let mut audio_count = 0usize;
+    let mut gpu_count = 0usize;
+    let mut other_count = 0usize;
+
+    for change in &state.sysfs_changes {
+        if change.path.contains("energy_performance_preference") {
+            epp_count += 1;
+        } else if change.path.contains("/bus/pci/") {
+            pci_count += 1;
+        } else if change.path.contains("/bus/usb/") {
+            usb_count += 1;
+        } else if change.path.contains("snd_hda_intel") {
+            audio_count += 1;
+        } else if change.path.contains("power_dpm") {
+            gpu_count += 1;
+        } else {
+            other_count += 1;
+        }
+    }
+
+    let mut parts = Vec::new();
+    if epp_count > 0 {
+        parts.push(format!("{} CPU cores", epp_count));
+    }
+    if other_count > 0 {
+        parts.push(format!("{} system", other_count));
+    }
+    if pci_count > 0 {
+        parts.push(format!("{} PCI", pci_count));
+    }
+    if usb_count > 0 {
+        parts.push(format!("{} USB", usb_count));
+    }
+    if audio_count > 0 {
+        parts.push(format!("{} audio", audio_count));
+    }
+    if gpu_count > 0 {
+        parts.push(format!("{} GPU", gpu_count));
+    }
+
+    let sysfs_summary = parts.join(", ");
+
+    let mut lines = Vec::new();
+    if !sysfs_summary.is_empty() {
+        lines.push(format!("  Sysfs: {}", sysfs_summary));
+    }
+    if !state.kernel_params_added.is_empty() {
+        lines.push(format!(
+            "  Kernel params: {}",
+            state.kernel_params_added.join(", ")
+        ));
+    }
+    if !state.acpi_wakeup_toggled.is_empty() {
+        lines.push(format!(
+            "  ACPI wakeup disabled: {}",
+            state.acpi_wakeup_toggled.join(", ")
+        ));
+    }
+    if !state.services_disabled.is_empty() {
+        lines.push(format!(
+            "  Services disabled: {}",
+            state.services_disabled.join(", ")
+        ));
+    }
+    for line in &lines {
+        println!("{}", line);
+    }
 
     if !state.kernel_params_added.is_empty() {
         println!();

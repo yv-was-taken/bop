@@ -187,6 +187,8 @@ pub fn print_audit_json(hw: &HardwareInfo, findings: &[Finding], score: u32, pro
             "current": f.current_value,
             "recommended": f.recommended_value,
             "impact": f.impact,
+            "path": f.path,
+            "weight": f.weight,
         })).collect::<Vec<_>>(),
     });
 
