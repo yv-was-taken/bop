@@ -14,6 +14,13 @@ pub struct Cli {
     /// Output as JSON instead of formatted tables
     #[arg(long, global = true)]
     pub json: bool,
+
+    /// Enable aggressive optimizations that trade performance for battery life.
+    /// Includes deeper PCIe sleep states (L1.1/L1.2), lower TDP, turbo boost
+    /// disable, and full USB autosuspend. May cause WiFi instability, input
+    /// latency, or reduced performance.
+    #[arg(long, global = true)]
+    pub aggressive: bool,
 }
 
 #[derive(Subcommand)]

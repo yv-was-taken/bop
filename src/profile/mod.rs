@@ -13,7 +13,12 @@ pub trait HardwareProfile: std::fmt::Debug {
     fn matches(&self, hw: &HardwareInfo) -> bool;
 
     /// Run all audit checks specific to this hardware
-    fn audit(&self, hw: &HardwareInfo) -> Vec<Finding>;
+    fn audit(&self, hw: &HardwareInfo) -> Vec<Finding> {
+        self.audit_with_opts(hw, false)
+    }
+
+    /// Run audit checks with aggressive mode option
+    fn audit_with_opts(&self, hw: &HardwareInfo, aggressive: bool) -> Vec<Finding>;
 }
 
 /// Registry of all known hardware profiles.

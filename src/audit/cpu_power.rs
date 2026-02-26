@@ -2,6 +2,14 @@ use crate::audit::{Finding, Severity};
 use crate::detect::HardwareInfo;
 
 pub fn check(hw: &HardwareInfo) -> Vec<Finding> {
+    check_with_opts(hw, false)
+}
+
+pub fn check_aggressive(hw: &HardwareInfo) -> Vec<Finding> {
+    check_with_opts(hw, true)
+}
+
+fn check_with_opts(hw: &HardwareInfo, aggressive: bool) -> Vec<Finding> {
     let mut findings = Vec::new();
 
     // Check if amd-pstate driver is active (AMD systems only)
@@ -108,20 +116,33 @@ pub fn check(hw: &HardwareInfo) -> Vec<Finding> {
                 );
             }
             "balanced" => {
-                // Balanced is a reasonable default; low-power trades sustained
-                // performance for power savings — a user preference, not a bug.
-                findings.push(
-                    Finding::new(
-                        Severity::Info,
-                        "CPU",
-                        "Platform profile at balanced — low-power saves ~0.5-1W but throttles more",
-                    )
-                    .current("balanced")
-                    .recommended("low-power (trades sustained performance for battery)")
-                    .impact("~0.5-1W savings with lower TDP cap")
-                    .path("/sys/firmware/acpi/platform_profile")
-                    .weight(0),
-                );
+                if aggressive {
+                    findings.push(
+                        Finding::new(
+                            Severity::Low,
+                            "CPU",
+                            "Platform profile at balanced — low-power reduces TDP for battery savings",
+                        )
+                        .current("balanced")
+                        .recommended("low-power")
+                        .impact("~0.5-1W savings with lower TDP cap (reduced sustained performance)")
+                        .path("/sys/firmware/acpi/platform_profile")
+                        .weight(3),
+                    );
+                } else {
+                    findings.push(
+                        Finding::new(
+                            Severity::Info,
+                            "CPU",
+                            "Platform profile at balanced — low-power saves ~0.5-1W but throttles more",
+                        )
+                        .current("balanced")
+                        .recommended("low-power (trades sustained performance for battery)")
+                        .impact("~0.5-1W savings with lower TDP cap")
+                        .path("/sys/firmware/acpi/platform_profile")
+                        .weight(0),
+                    );
+                }
             }
             "low-power" => {
                 // Optimal
@@ -145,6 +166,22 @@ pub fn check(hw: &HardwareInfo) -> Vec<Finding> {
             .recommended("powersave")
             .impact("amd-pstate uses EPP for power/perf balance; powersave governor is correct")
             .path("cpu*/cpufreq/scaling_governor")
+            .weight(4),
+        );
+    }
+
+    // Aggressive: flag turbo boost as a power-saving opportunity
+    if aggressive && hw.cpu.has_boost && hw.cpu.boost_enabled {
+        findings.push(
+            Finding::new(
+                Severity::Low,
+                "CPU",
+                "Turbo boost enabled — disabling saves power under bursty loads",
+            )
+            .current("enabled")
+            .recommended("disabled (significant single-thread performance loss)")
+            .impact("~2-5W savings under load at cost of peak performance")
+            .path("sys/devices/system/cpu/cpufreq/boost")
             .weight(4),
         );
     }

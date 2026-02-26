@@ -140,6 +140,15 @@ pub struct ModprobeConfig {
 
 /// Build the plan of changes based on audit findings.
 pub fn build_plan(hw: &HardwareInfo, sysfs: &SysfsRoot) -> ApplyPlan {
+    build_plan_with_opts(hw, sysfs, false)
+}
+
+/// Build the plan with aggressive optimizations enabled.
+pub fn build_plan_aggressive(hw: &HardwareInfo, sysfs: &SysfsRoot) -> ApplyPlan {
+    build_plan_with_opts(hw, sysfs, true)
+}
+
+fn build_plan_with_opts(hw: &HardwareInfo, sysfs: &SysfsRoot, aggressive: bool) -> ApplyPlan {
     let mut plan = ApplyPlan {
         sysfs_writes: Vec::new(),
         kernel_params: Vec::new(),
@@ -171,25 +180,49 @@ pub fn build_plan(hw: &HardwareInfo, sysfs: &SysfsRoot) -> ApplyPlan {
         }
     }
 
-    // Platform profile -> low-power
-    if hw.platform.platform_profile.as_deref() != Some("low-power") {
-        plan.sysfs_writes.push(PlannedSysfsWrite {
-            path: "/sys/firmware/acpi/platform_profile".to_string(),
-            value: "low-power".to_string(),
-            description: "Set platform profile to low-power".to_string(),
-        });
+    // Platform profile
+    if aggressive {
+        // Aggressive: always set to low-power
+        if hw.platform.platform_profile.as_deref() != Some("low-power") {
+            plan.sysfs_writes.push(PlannedSysfsWrite {
+                path: "/sys/firmware/acpi/platform_profile".to_string(),
+                value: "low-power".to_string(),
+                description: "Set platform profile to low-power".to_string(),
+            });
+        }
+    } else {
+        // Normal: only fix performance -> low-power, leave balanced alone
+        if hw.platform.platform_profile.as_deref() == Some("performance") {
+            plan.sysfs_writes.push(PlannedSysfsWrite {
+                path: "/sys/firmware/acpi/platform_profile".to_string(),
+                value: "low-power".to_string(),
+                description: "Set platform profile to low-power".to_string(),
+            });
+        }
     }
 
-    // ASPM -> powersave (safe default; powersupersave can cause WiFi/NVMe issues)
-    if !matches!(
-        hw.pci.aspm_policy.as_deref(),
-        Some("powersave" | "powersupersave")
-    ) {
-        plan.sysfs_writes.push(PlannedSysfsWrite {
-            path: "/sys/module/pcie_aspm/parameters/policy".to_string(),
-            value: "powersave".to_string(),
-            description: "Set PCIe ASPM policy to powersave".to_string(),
-        });
+    // ASPM
+    if aggressive {
+        // Aggressive: powersupersave (deepest L1.1/L1.2 substates)
+        if hw.pci.aspm_policy.as_deref() != Some("powersupersave") {
+            plan.sysfs_writes.push(PlannedSysfsWrite {
+                path: "/sys/module/pcie_aspm/parameters/policy".to_string(),
+                value: "powersupersave".to_string(),
+                description: "Set PCIe ASPM policy to powersupersave (aggressive)".to_string(),
+            });
+        }
+    } else {
+        // Normal: powersave (safe L0s + L1)
+        if !matches!(
+            hw.pci.aspm_policy.as_deref(),
+            Some("powersave" | "powersupersave")
+        ) {
+            plan.sysfs_writes.push(PlannedSysfsWrite {
+                path: "/sys/module/pcie_aspm/parameters/policy".to_string(),
+                value: "powersave".to_string(),
+                description: "Set PCIe ASPM policy to powersave".to_string(),
+            });
+        }
     }
 
     // PCI runtime PM -> auto
@@ -203,7 +236,7 @@ pub fn build_plan(hw: &HardwareInfo, sysfs: &SysfsRoot) -> ApplyPlan {
         }
     }
 
-    // USB autosuspend -> auto (skip input devices and expansion cards)
+    // USB autosuspend -> auto
     if let Ok(devices) = sysfs.list_dir("sys/bus/usb/devices") {
         for device in devices {
             if device.contains(':') {
@@ -213,22 +246,25 @@ pub fn build_plan(hw: &HardwareInfo, sysfs: &SysfsRoot) -> ApplyPlan {
             if let Some(val) = sysfs.read_optional(&path).unwrap_or(None)
                 && val != "auto"
             {
-                let product = sysfs
-                    .read_optional(format!("sys/bus/usb/devices/{}/product", device))
-                    .unwrap_or(None)
-                    .unwrap_or_default()
-                    .to_lowercase();
+                // Normal mode: skip input devices and expansion cards
+                if !aggressive {
+                    let product = sysfs
+                        .read_optional(format!("sys/bus/usb/devices/{}/product", device))
+                        .unwrap_or(None)
+                        .unwrap_or_default()
+                        .to_lowercase();
 
-                let is_input = product.contains("keyboard")
-                    || product.contains("mouse")
-                    || product.contains("trackpad")
-                    || product.contains("touchpad");
-                let is_expansion = product.contains("expansion")
-                    || product.contains("displayport")
-                    || product.contains("hdmi");
+                    let is_input = product.contains("keyboard")
+                        || product.contains("mouse")
+                        || product.contains("trackpad")
+                        || product.contains("touchpad");
+                    let is_expansion = product.contains("expansion")
+                        || product.contains("displayport")
+                        || product.contains("hdmi");
 
-                if is_input || is_expansion {
-                    continue;
+                    if is_input || is_expansion {
+                        continue;
+                    }
                 }
 
                 plan.sysfs_writes.push(PlannedSysfsWrite {
@@ -274,6 +310,15 @@ pub fn build_plan(hw: &HardwareInfo, sysfs: &SysfsRoot) -> ApplyPlan {
             path: format!("/{}/power_dpm_force_performance_level", card_path),
             value: "auto".to_string(),
             description: "Set GPU DPM to auto for dynamic power management".to_string(),
+        });
+    }
+
+    // Aggressive: disable CPU turbo boost
+    if aggressive && hw.cpu.has_boost && hw.cpu.boost_enabled {
+        plan.sysfs_writes.push(PlannedSysfsWrite {
+            path: "/sys/devices/system/cpu/cpufreq/boost".to_string(),
+            value: "0".to_string(),
+            description: "Disable CPU turbo boost (aggressive)".to_string(),
         });
     }
 

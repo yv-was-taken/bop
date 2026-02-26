@@ -17,13 +17,19 @@ impl HardwareProfile for GenericLaptop {
         hw.battery.present
     }
 
-    fn audit(&self, hw: &HardwareInfo) -> Vec<Finding> {
+    fn audit_with_opts(&self, hw: &HardwareInfo, aggressive: bool) -> Vec<Finding> {
         let sysfs = SysfsRoot::system();
         let mut findings = Vec::new();
 
-        findings.extend(audit::cpu_power::check(hw));
-        findings.extend(audit::pci_power::check(hw));
-        findings.extend(audit::usb_power::check(&sysfs));
+        if aggressive {
+            findings.extend(audit::cpu_power::check_aggressive(hw));
+            findings.extend(audit::pci_power::check_aggressive(hw));
+            findings.extend(audit::usb_power::check_aggressive(&sysfs));
+        } else {
+            findings.extend(audit::cpu_power::check(hw));
+            findings.extend(audit::pci_power::check(hw));
+            findings.extend(audit::usb_power::check(&sysfs));
+        }
         findings.extend(audit::audio::check(&sysfs));
         findings.extend(audit::network_power::check(hw));
         findings.extend(audit::sleep::check(hw, &sysfs));

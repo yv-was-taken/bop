@@ -2,13 +2,26 @@ use crate::audit::{Finding, Severity};
 use crate::detect::HardwareInfo;
 
 pub fn check(hw: &HardwareInfo) -> Vec<Finding> {
+    check_with_opts(hw, false)
+}
+
+pub fn check_aggressive(hw: &HardwareInfo) -> Vec<Finding> {
+    check_with_opts(hw, true)
+}
+
+fn check_with_opts(hw: &HardwareInfo, aggressive: bool) -> Vec<Finding> {
     let mut findings = Vec::new();
 
     // Check ASPM policy
-    // powersave (L0s + L1) is the safe default; powersupersave (L1.1/L1.2) can
-    // cause WiFi dropouts and NVMe stutter on some hardware, so it's reserved
-    // for aggressive mode.
+    // Normal: powersave (L0s + L1) is the safe target.
+    // Aggressive: powersupersave (L1.1/L1.2) for deepest sleep states.
     if let Some(ref policy) = hw.pci.aspm_policy {
+        let target = if aggressive {
+            "powersupersave"
+        } else {
+            "powersave"
+        };
+
         match policy.as_str() {
             "default" => {
                 findings.push(
@@ -18,7 +31,7 @@ pub fn check(hw: &HardwareInfo) -> Vec<Finding> {
                         "ASPM policy at 'default' - not using link sleep states",
                     )
                     .current("default")
-                    .recommended("powersave")
+                    .recommended(target)
                     .impact("~0.5-1W savings from PCIe link power management")
                     .path("/sys/module/pcie_aspm/parameters/policy")
                     .weight(6),
@@ -32,10 +45,24 @@ pub fn check(hw: &HardwareInfo) -> Vec<Finding> {
                         "ASPM disabled (performance mode) - PCIe links always active",
                     )
                     .current("performance")
-                    .recommended("powersave")
+                    .recommended(target)
                     .impact("~1-2W savings from PCIe link power management")
                     .path("/sys/module/pcie_aspm/parameters/policy")
                     .weight(8),
+                );
+            }
+            "powersave" if aggressive => {
+                findings.push(
+                    Finding::new(
+                        Severity::Low,
+                        "PCIe",
+                        "ASPM at powersave - powersupersave enables deeper L1.1/L1.2 substates",
+                    )
+                    .current("powersave")
+                    .recommended("powersupersave")
+                    .impact("~0.2-0.5W additional savings (may cause WiFi/NVMe issues)")
+                    .path("/sys/module/pcie_aspm/parameters/policy")
+                    .weight(3),
                 );
             }
             "powersave" | "powersupersave" => {

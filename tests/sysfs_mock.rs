@@ -1454,7 +1454,7 @@ fn test_snapshot_round_trip_from_fixture() {
 }
 
 #[test]
-fn test_snapshot_build_plan() {
+fn test_snapshot_build_plan_normal() {
     let snap = Snapshot::load(&snapshot_fixture_path()).unwrap();
     let tmp = TempDir::new().unwrap();
     let sysfs = snap.materialize(tmp.path()).unwrap();
@@ -1462,13 +1462,46 @@ fn test_snapshot_build_plan() {
     let hw = HardwareInfo::detect(&sysfs);
     let plan = apply::build_plan(&hw, &sysfs);
 
-    // The real snapshot has balance_power EPP already set, so EPP writes
-    // should not appear in the plan (already optimal or close)
-    // Platform profile is "balanced" which should trigger a write to "low-power"
+    // Normal mode: snapshot has "balanced" platform profile — should NOT force low-power
+    assert!(
+        !plan
+            .sysfs_writes
+            .iter()
+            .any(|w| w.path.contains("platform_profile")),
+        "Normal mode should not change balanced platform profile"
+    );
+}
+
+#[test]
+fn test_snapshot_build_plan_aggressive() {
+    let snap = Snapshot::load(&snapshot_fixture_path()).unwrap();
+    let tmp = TempDir::new().unwrap();
+    let sysfs = snap.materialize(tmp.path()).unwrap();
+
+    let hw = HardwareInfo::detect(&sysfs);
+    let plan = apply::build_plan_aggressive(&hw, &sysfs);
+
+    // Aggressive mode: should force low-power
     assert!(
         plan.sysfs_writes
             .iter()
             .any(|w| w.path.contains("platform_profile") && w.value == "low-power"),
-        "Plan should include platform_profile -> low-power (snapshot has 'balanced')"
+        "Aggressive mode should set platform_profile -> low-power"
+    );
+
+    // Aggressive mode: should set powersupersave
+    assert!(
+        plan.sysfs_writes
+            .iter()
+            .any(|w| w.path.contains("pcie_aspm") && w.value == "powersupersave"),
+        "Aggressive mode should set ASPM to powersupersave"
+    );
+
+    // Aggressive mode: should disable boost
+    assert!(
+        plan.sysfs_writes
+            .iter()
+            .any(|w| w.path.contains("boost") && w.value == "0"),
+        "Aggressive mode should disable CPU boost"
     );
 }

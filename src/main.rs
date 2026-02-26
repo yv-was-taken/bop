@@ -9,8 +9,8 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Audit => cmd_audit(cli.json)?,
-        Command::Apply { dry_run } => cmd_apply(dry_run)?,
+        Command::Audit => cmd_audit(cli.json, cli.aggressive)?,
+        Command::Apply { dry_run } => cmd_apply(dry_run, cli.aggressive)?,
         Command::Monitor => cmd_monitor()?,
         Command::Revert => cmd_revert()?,
         Command::Status => cmd_status(cli.json)?,
@@ -22,7 +22,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn cmd_audit(json: bool) -> Result<()> {
+fn cmd_audit(json: bool, aggressive: bool) -> Result<()> {
     let sysfs = SysfsRoot::system();
     let hw = HardwareInfo::detect(&sysfs);
 
@@ -32,7 +32,7 @@ fn cmd_audit(json: bool) -> Result<()> {
     if json {
         let (findings, score) = match &profile {
             Some(p) => {
-                let findings = p.audit(&hw);
+                let findings = p.audit_with_opts(&hw, aggressive);
                 let score = bop::audit::calculate_score(&findings);
                 (findings, score)
             }
@@ -48,20 +48,36 @@ fn cmd_audit(json: bool) -> Result<()> {
 
     bop::output::print_hardware_summary(&hw);
 
+    if aggressive {
+        println!(
+            "  {} {}",
+            "Mode:".bold(),
+            "aggressive (trading performance for battery)".yellow()
+        );
+    }
+
     match profile {
         Some(ref p) => {
             println!("  {} {}", "Matched profile:".bold(), p.name().green());
 
-            let findings = p.audit(&hw);
+            let findings = p.audit_with_opts(&hw, aggressive);
             let score = bop::audit::calculate_score(&findings);
             bop::output::print_audit_findings(&findings, score);
 
             if !findings.is_empty() {
-                println!(
-                    "  Run {} to see what would change, or {} to apply.",
-                    "bop apply --dry-run".cyan(),
-                    "sudo bop apply".cyan()
-                );
+                if aggressive {
+                    println!(
+                        "  Run {} to see what would change, or {} to apply.",
+                        "bop --aggressive apply --dry-run".cyan(),
+                        "sudo bop --aggressive apply".cyan()
+                    );
+                } else {
+                    println!(
+                        "  Run {} to see what would change, or {} to apply.",
+                        "bop apply --dry-run".cyan(),
+                        "sudo bop apply".cyan()
+                    );
+                }
             }
         }
         None => {
@@ -81,7 +97,7 @@ fn cmd_audit(json: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_apply(dry_run: bool) -> Result<()> {
+fn cmd_apply(dry_run: bool, aggressive: bool) -> Result<()> {
     let sysfs = SysfsRoot::system();
     let hw = HardwareInfo::detect(&sysfs);
 
@@ -92,7 +108,38 @@ fn cmd_apply(dry_run: bool) -> Result<()> {
         );
     }
 
-    let plan = bop::apply::build_plan(&hw, &sysfs);
+    let plan = if aggressive {
+        bop::apply::build_plan_aggressive(&hw, &sysfs)
+    } else {
+        bop::apply::build_plan(&hw, &sysfs)
+    };
+
+    if aggressive {
+        println!();
+        println!(
+            "  {}",
+            "AGGRESSIVE MODE — performance tradeoffs ahead:"
+                .red()
+                .bold()
+        );
+        println!(
+            "    {} PCIe ASPM powersupersave — may cause WiFi dropouts or NVMe stutter",
+            "*".red()
+        );
+        println!(
+            "    {} Platform profile low-power — reduced sustained CPU performance",
+            "*".red()
+        );
+        println!(
+            "    {} Turbo boost disabled — significant single-thread performance loss",
+            "*".red()
+        );
+        println!(
+            "    {} Full USB autosuspend — may cause input latency or missed hotplug",
+            "*".red()
+        );
+        println!();
+    }
 
     bop::apply::print_plan(&plan);
 
@@ -106,7 +153,16 @@ fn cmd_apply(dry_run: bool) -> Result<()> {
     }
 
     // Confirm
-    println!("{}", "This will apply the changes listed above.".bold());
+    if aggressive {
+        println!(
+            "{}",
+            "This will apply AGGRESSIVE optimizations. Performance WILL be reduced."
+                .red()
+                .bold()
+        );
+    } else {
+        println!("{}", "This will apply the changes listed above.".bold());
+    }
     print!("Continue? [y/N] ");
     std::io::Write::flush(&mut std::io::stdout())?;
 

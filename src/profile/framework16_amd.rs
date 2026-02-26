@@ -15,15 +15,21 @@ impl HardwareProfile for Framework16Amd {
         hw.dmi.is_framework_16() && hw.cpu.is_amd()
     }
 
-    fn audit(&self, hw: &HardwareInfo) -> Vec<Finding> {
+    fn audit_with_opts(&self, hw: &HardwareInfo, aggressive: bool) -> Vec<Finding> {
         let sysfs = SysfsRoot::system();
         let mut findings = Vec::new();
 
         findings.extend(audit::kernel_params::check(hw));
-        findings.extend(audit::cpu_power::check(hw));
+        if aggressive {
+            findings.extend(audit::cpu_power::check_aggressive(hw));
+            findings.extend(audit::pci_power::check_aggressive(hw));
+            findings.extend(audit::usb_power::check_aggressive(&sysfs));
+        } else {
+            findings.extend(audit::cpu_power::check(hw));
+            findings.extend(audit::pci_power::check(hw));
+            findings.extend(audit::usb_power::check(&sysfs));
+        }
         findings.extend(audit::gpu_power::check(hw));
-        findings.extend(audit::pci_power::check(hw));
-        findings.extend(audit::usb_power::check(&sysfs));
         findings.extend(audit::audio::check(&sysfs));
         findings.extend(audit::network_power::check(hw));
         findings.extend(audit::sleep::check(hw, &sysfs));
