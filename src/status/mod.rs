@@ -68,9 +68,29 @@ impl StatusReport {
             + self.systemd_unit.iter().count()
     }
 
-    /// Count of drifted (inactive) optimizations.
+    /// Count of confirmed drift (value changed back, service re-enabled, etc.).
+    /// Excludes "pending reboot" kernel params and "unknown" (missing path) sysfs entries.
     pub fn drifted_count(&self) -> usize {
-        self.total_count() - self.active_count()
+        self.sysfs
+            .iter()
+            .filter(|s| !s.active && s.actual.is_some())
+            .count()
+            + self.acpi_wakeup.iter().filter(|w| !w.active).count()
+            + self.services.iter().filter(|s| !s.still_stopped).count()
+            + self.systemd_unit.iter().filter(|u| !u.exists).count()
+    }
+
+    /// Count of kernel params written to boot entries but not yet in running cmdline.
+    pub fn pending_reboot_count(&self) -> usize {
+        self.kernel_params.iter().filter(|k| !k.in_cmdline).count()
+    }
+
+    /// Count of sysfs paths that no longer exist (device removed).
+    pub fn unknown_count(&self) -> usize {
+        self.sysfs
+            .iter()
+            .filter(|s| !s.active && s.actual.is_none())
+            .count()
     }
 }
 
@@ -355,6 +375,10 @@ XHC1\t  S0\t*enabled   pci:0000:c4:00.4";
 
         assert_eq!(report.total_count(), 6);
         assert_eq!(report.active_count(), 4);
-        assert_eq!(report.drifted_count(), 2);
+        // sysfs "b" has actual=Some("z") != expected "y" -> drifted (not unknown)
+        // kernel param "bar=1" not in cmdline -> pending reboot (not drifted)
+        assert_eq!(report.drifted_count(), 1);
+        assert_eq!(report.pending_reboot_count(), 1);
+        assert_eq!(report.unknown_count(), 0);
     }
 }

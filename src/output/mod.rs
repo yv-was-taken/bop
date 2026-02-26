@@ -293,18 +293,31 @@ pub fn print_status(report: &StatusReport) {
     let active = report.active_count();
     let total = report.total_count();
     let drifted = report.drifted_count();
-    if drifted == 0 {
+    let pending = report.pending_reboot_count();
+    let unknown = report.unknown_count();
+
+    if drifted == 0 && pending == 0 && unknown == 0 {
         println!(
             "  {}",
             format!("All {total} optimizations active.").green().bold()
         );
     } else {
-        println!(
-            "  {}",
-            format!("{active}/{total} optimizations active, {drifted} drifted")
-                .yellow()
-                .bold()
-        );
+        let mut parts = vec![format!("{active}/{total} optimizations active")];
+        if drifted > 0 {
+            parts.push(format!("{drifted} drifted"));
+        }
+        if pending > 0 {
+            parts.push(format!("{pending} pending reboot"));
+        }
+        if unknown > 0 {
+            parts.push(format!("{unknown} unknown"));
+        }
+        let color = if drifted > 0 {
+            parts.join(", ").yellow().bold()
+        } else {
+            parts.join(", ").cyan().bold()
+        };
+        println!("  {}", color);
     }
 }
 
