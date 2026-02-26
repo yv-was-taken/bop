@@ -86,7 +86,7 @@ fn check_sysfs(state: &ApplyState) -> Vec<SysfsStatus> {
             let active = actual.as_deref() == Some(change.new_value.trim());
             SysfsStatus {
                 path: change.path.clone(),
-                expected: change.new_value.clone(),
+                expected: change.new_value.trim().to_string(),
                 actual,
                 active,
             }
@@ -138,7 +138,11 @@ fn check_services(state: &ApplyState) -> Vec<ServiceStatus> {
             let is_active = std::process::Command::new("systemctl")
                 .args(["is-active", "--quiet", svc])
                 .status()
-                .is_ok_and(|s| s.success());
+                .is_ok_and(|s| s.success())
+                || std::process::Command::new("systemctl")
+                    .args(["is-enabled", "--quiet", svc])
+                    .status()
+                    .is_ok_and(|s| s.success());
             ServiceStatus {
                 name: svc.clone(),
                 still_stopped: !is_active,
