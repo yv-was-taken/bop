@@ -889,3 +889,84 @@ fn test_apply_then_revert_round_trip() {
         );
     }
 }
+
+#[test]
+fn test_audit_nmi_watchdog_enabled() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+
+    // Add NMI watchdog file with value 1 (enabled)
+    let nmi_dir = tmp.path().join("proc/sys/kernel");
+    fs::create_dir_all(&nmi_dir).unwrap();
+    fs::write(nmi_dir.join("nmi_watchdog"), "1\n").unwrap();
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let findings = audit::sysctl::check(&sysfs);
+
+    let nmi_finding = findings
+        .iter()
+        .find(|f| f.path.as_deref() == Some("/proc/sys/kernel/nmi_watchdog"))
+        .expect("Expected a finding about NMI watchdog");
+
+    assert_eq!(nmi_finding.severity, audit::Severity::Medium);
+    assert_eq!(nmi_finding.current_value, "1");
+    assert_eq!(nmi_finding.recommended_value, "0");
+    assert_eq!(nmi_finding.weight, 4);
+}
+
+#[test]
+fn test_audit_dirty_writeback_low() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+
+    // Add dirty_writeback_centisecs file with value 500 (too low)
+    let vm_dir = tmp.path().join("proc/sys/vm");
+    fs::create_dir_all(&vm_dir).unwrap();
+    fs::write(vm_dir.join("dirty_writeback_centisecs"), "500\n").unwrap();
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let findings = audit::sysctl::check(&sysfs);
+
+    let wb_finding = findings
+        .iter()
+        .find(|f| f.path.as_deref() == Some("/proc/sys/vm/dirty_writeback_centisecs"))
+        .expect("Expected a finding about dirty_writeback_centisecs");
+
+    assert_eq!(wb_finding.severity, audit::Severity::Low);
+    assert_eq!(wb_finding.current_value, "500");
+    assert_eq!(wb_finding.recommended_value, "1500");
+    assert_eq!(wb_finding.weight, 2);
+}
+
+#[test]
+fn test_build_plan_includes_sysctl_writes() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+
+    // Add sysctl files with suboptimal values
+    let nmi_dir = tmp.path().join("proc/sys/kernel");
+    fs::create_dir_all(&nmi_dir).unwrap();
+    fs::write(nmi_dir.join("nmi_watchdog"), "1\n").unwrap();
+
+    let vm_dir = tmp.path().join("proc/sys/vm");
+    fs::create_dir_all(&vm_dir).unwrap();
+    fs::write(vm_dir.join("dirty_writeback_centisecs"), "500\n").unwrap();
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+    let plan = apply::build_plan(&hw, &sysfs);
+
+    assert!(
+        plan.sysfs_writes
+            .iter()
+            .any(|w| w.path == "/proc/sys/kernel/nmi_watchdog" && w.value == "0"),
+        "Expected plan to include sysfs write for nmi_watchdog -> 0"
+    );
+
+    assert!(
+        plan.sysfs_writes
+            .iter()
+            .any(|w| w.path == "/proc/sys/vm/dirty_writeback_centisecs" && w.value == "1500"),
+        "Expected plan to include sysfs write for dirty_writeback_centisecs -> 1500"
+    );
+}

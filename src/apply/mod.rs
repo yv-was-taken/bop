@@ -256,6 +256,32 @@ pub fn build_plan(hw: &HardwareInfo, sysfs: &SysfsRoot) -> ApplyPlan {
         });
     }
 
+    // NMI watchdog -> disable
+    if let Some(val) = sysfs
+        .read_optional("proc/sys/kernel/nmi_watchdog")
+        .unwrap_or(None)
+        && val == "1"
+    {
+        plan.sysfs_writes.push(PlannedSysfsWrite {
+            path: "/proc/sys/kernel/nmi_watchdog".to_string(),
+            value: "0".to_string(),
+            description: "Disable NMI watchdog to reduce interrupts".to_string(),
+        });
+    }
+
+    // Dirty writeback interval -> 1500 (15 seconds)
+    if let Some(val) = sysfs
+        .read_optional("proc/sys/vm/dirty_writeback_centisecs")
+        .unwrap_or(None)
+        && val.parse::<u32>().unwrap_or(0) < 1500
+    {
+        plan.sysfs_writes.push(PlannedSysfsWrite {
+            path: "/proc/sys/vm/dirty_writeback_centisecs".to_string(),
+            value: "1500".to_string(),
+            description: "Increase dirty writeback interval to reduce storage wakeups".to_string(),
+        });
+    }
+
     // Kernel params
     if hw.kernel_param_value("acpi.ec_no_wakeup").as_deref() != Some("1") {
         plan.kernel_params.push("acpi.ec_no_wakeup=1".to_string());

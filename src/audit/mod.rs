@@ -7,6 +7,7 @@ pub mod network_power;
 pub mod pci_power;
 pub mod services;
 pub mod sleep;
+pub mod sysctl;
 pub mod usb_power;
 
 use serde::Serialize;
