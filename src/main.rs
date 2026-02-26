@@ -13,6 +13,7 @@ fn main() -> Result<()> {
         Command::Apply { dry_run } => cmd_apply(dry_run)?,
         Command::Monitor => cmd_monitor()?,
         Command::Revert => cmd_revert()?,
+        Command::Status => cmd_status(cli.json)?,
         Command::Wake { action } => cmd_wake(action)?,
     }
 
@@ -152,6 +153,11 @@ fn cmd_monitor() -> Result<()> {
 
 fn cmd_revert() -> Result<()> {
     bop::revert::revert()?;
+    Ok(())
+}
+
+fn cmd_status(_json: bool) -> Result<()> {
+    println!("status: not yet implemented");
     Ok(())
 }
 

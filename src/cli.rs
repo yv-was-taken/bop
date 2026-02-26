@@ -33,6 +33,9 @@ pub enum Command {
     /// Undo all changes from saved state
     Revert,
 
+    /// Show current optimization state and detect drift
+    Status,
+
     /// Manage expansion card wakeup sources (Framework-specific)
     Wake {
         #[command(subcommand)]
