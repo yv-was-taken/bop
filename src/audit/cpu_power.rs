@@ -94,7 +94,8 @@ pub fn check(hw: &HardwareInfo) -> Vec<Finding> {
 
     // Check governor
     if let Some(ref governor) = hw.cpu.governor
-        && hw.cpu.is_amd_pstate() && governor != "powersave"
+        && hw.cpu.is_amd_pstate()
+        && governor != "powersave"
     {
         findings.push(
             Finding::new(

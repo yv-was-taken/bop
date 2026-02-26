@@ -50,9 +50,14 @@ fn add_kernel_params_in_dir(
                 path: path.display().to_string(),
                 original_content: content,
             });
-            std::fs::write(&path, new_content).map_err(|e| {
-                Error::Bootloader(format!("failed to write {}: {}", path.display(), e))
-            })?;
+            if let Err(e) = std::fs::write(&path, new_content) {
+                let _ = restore_kernel_param_backups(&backups);
+                return Err(Error::Bootloader(format!(
+                    "failed to write {}: {}",
+                    path.display(),
+                    e
+                )));
+            }
         }
     }
 

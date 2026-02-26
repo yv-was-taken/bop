@@ -80,9 +80,15 @@ pub fn print_hardware_summary(hw: &HardwareInfo) {
     }
 
     // Box width from content
+    let eff_label_w = rows
+        .iter()
+        .map(|(l, _)| l.len())
+        .max()
+        .unwrap_or(0)
+        .max(LABEL_W);
     let inner_w = rows
         .iter()
-        .map(|(l, v)| l.len().max(LABEL_W) + 2 + v.len())
+        .map(|(_, v)| eff_label_w + 2 + v.len())
         .max()
         .unwrap_or(40);
 
@@ -91,8 +97,8 @@ pub fn print_hardware_summary(hw: &HardwareInfo) {
     println!("╭─ {} {}╮", title.bold(), "─".repeat(fill));
 
     for (label, value) in &rows {
-        let padded = format!("{:<w$}", label, w = LABEL_W);
-        let pad = inner_w.saturating_sub(LABEL_W + 2 + value.len());
+        let padded = format!("{:<w$}", label, w = eff_label_w);
+        let pad = inner_w.saturating_sub(eff_label_w + 2 + value.len());
         println!("│ {}  {}{} │", padded.dimmed(), value, " ".repeat(pad));
     }
 
@@ -111,7 +117,7 @@ pub fn print_audit_findings(findings: &[Finding], score: u32) {
     let count = findings.len();
     let title = format!("Findings ({})", count);
     let divider_w: usize = 64;
-    let fill = divider_w.saturating_sub(2 + title.len());
+    let fill = divider_w.saturating_sub(4 + title.len());
     println!("── {} {}", title.bold(), "─".repeat(fill));
 
     let mut prev_severity: Option<Severity> = None;

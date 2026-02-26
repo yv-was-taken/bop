@@ -12,7 +12,7 @@ pub fn check(hw: &HardwareInfo) -> Vec<Finding> {
         {
             Ok(output) => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                if stdout.contains("off") {
+                if stdout.contains("Power save: off") {
                     findings.push(
                         Finding::new(Severity::Medium, "Network", "WiFi power save disabled")
                             .current("off")

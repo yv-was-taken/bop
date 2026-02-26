@@ -29,24 +29,24 @@ pub fn run() -> Result<()> {
     println!();
     if has_rapl {
         println!(
-            "{:>8} {:>10} {:>10} {:>10} {:>10} {:>10}",
-            "Time".dimmed(),
-            "Battery W".cyan(),
-            "CPU W".cyan(),
-            "SoC W".cyan(),
-            "Batt %".cyan(),
-            "Est Hours".cyan(),
+            "{} {} {} {} {} {}",
+            format!("{:>8}", "Time").dimmed(),
+            format!("{:>10}", "Battery W").cyan(),
+            format!("{:>10}", "CPU W").cyan(),
+            format!("{:>10}", "SoC W").cyan(),
+            format!("{:>10}", "Batt %").cyan(),
+            format!("{:>10}", "Est Hours").cyan(),
         );
     } else {
         println!(
-            "{:>8} {:>10} {:>10} {:>10}",
-            "Time".dimmed(),
-            "Battery W".cyan(),
-            "Batt %".cyan(),
-            "Est Hours".cyan(),
+            "{} {} {} {}",
+            format!("{:>8}", "Time").dimmed(),
+            format!("{:>10}", "Battery W").cyan(),
+            format!("{:>10}", "Batt %").cyan(),
+            format!("{:>10}", "Est Hours").cyan(),
         );
     }
-    println!("{}", "-".repeat(if has_rapl { 68 } else { 46 }).dimmed());
+    println!("{}", "-".repeat(if has_rapl { 63 } else { 41 }).dimmed());
 
     loop {
         std::thread::sleep(Duration::from_secs(2));

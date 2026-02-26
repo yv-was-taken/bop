@@ -44,7 +44,6 @@ impl BatteryInfo {
             None => return info,
         };
 
-        info.supply_name = Some(bat_name.clone());
         let base = format!("{}/{}", ps_base, bat_name);
 
         if let Some(ptype) = sysfs
@@ -54,6 +53,8 @@ impl BatteryInfo {
         {
             return info;
         }
+
+        info.supply_name = Some(bat_name.clone());
 
         info.present = sysfs
             .read_optional(format!("{}/present", base))

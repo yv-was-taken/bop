@@ -25,10 +25,28 @@ fn acpi_wakeup_path() -> PathBuf {
 }
 
 #[cfg(test)]
-pub(crate) fn set_acpi_wakeup_path_override_for_tests(path: Option<PathBuf>) {
-    *ACPI_WAKEUP_PATH_OVERRIDE
+pub(crate) struct AcpiWakeupPathGuard {
+    _guard: std::marker::PhantomData<()>,
+}
+
+#[cfg(test)]
+impl Drop for AcpiWakeupPathGuard {
+    fn drop(&mut self) {
+        *ACPI_WAKEUP_PATH_OVERRIDE
+            .lock()
+            .expect("acpi wakeup path override lock poisoned") = None;
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn set_acpi_wakeup_path_override_for_tests(path: PathBuf) -> AcpiWakeupPathGuard {
+    let mut guard = ACPI_WAKEUP_PATH_OVERRIDE
         .lock()
-        .expect("acpi wakeup path override lock poisoned") = path;
+        .expect("acpi wakeup path override lock poisoned");
+    *guard = Some(path);
+    AcpiWakeupPathGuard {
+        _guard: std::marker::PhantomData,
+    }
 }
 
 /// Write a value to a sysfs path (absolute path).

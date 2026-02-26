@@ -48,8 +48,8 @@ pub fn list() -> Result<()> {
         let addr = ctrl.pci_address.as_deref().unwrap_or("N/A");
 
         print!(
-            "  {:<5} {}  {}",
-            ctrl.name.bold(),
+            "  {} {}  {}",
+            format!("{:<5}", ctrl.name).bold(),
             wake_badge,
             addr.dimmed()
         );

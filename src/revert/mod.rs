@@ -28,12 +28,6 @@ pub fn revert() -> Result<()> {
 
     if all_succeeded {
         println!("{}", "Revert complete.".green().bold());
-        if !state.kernel_param_backups.is_empty() || !state.kernel_params_added.is_empty() {
-            println!(
-                "{}",
-                "  Note: Kernel parameter changes require a reboot to take effect.".yellow()
-            );
-        }
     } else {
         eprintln!(
             "{}",
@@ -42,6 +36,25 @@ pub fn revert() -> Result<()> {
                 ApplyState::file_path().display()
             )
             .yellow()
+        );
+    }
+
+    // Show reboot note whenever kernel params were actually reverted,
+    // regardless of whether other steps failed.
+    let remaining = if !all_succeeded {
+        ApplyState::load().unwrap_or(None)
+    } else {
+        None
+    };
+    let had_kernel_params =
+        !state.kernel_param_backups.is_empty() || !state.kernel_params_added.is_empty();
+    let still_has_kernel_params = remaining
+        .as_ref()
+        .is_some_and(|r| !r.kernel_param_backups.is_empty() || !r.kernel_params_added.is_empty());
+    if had_kernel_params && !still_has_kernel_params {
+        println!(
+            "{}",
+            "  Note: Kernel parameter changes require a reboot to take effect.".yellow()
         );
     }
 
@@ -62,6 +75,7 @@ fn revert_loaded_state(state: &ApplyState) -> Result<bool> {
 fn has_pending_reverts(state: &ApplyState) -> bool {
     !state.sysfs_changes.is_empty()
         || !state.acpi_wakeup_toggled.is_empty()
+        || !state.kernel_param_backups.is_empty()
         || !state.kernel_params_added.is_empty()
         || !state.services_disabled.is_empty()
         || !state.systemd_units_created.is_empty()
@@ -123,7 +137,10 @@ fn revert_steps(state: &ApplyState) -> ApplyState {
         }
         match apply::kernel_params::restore_kernel_param_backups(&state.kernel_param_backups) {
             Ok(()) => println!("     {}", "(will take effect after reboot)".dimmed()),
-            Err(e) => eprintln!("     {} Failed: {}", "!".red(), e),
+            Err(e) => {
+                eprintln!("     {} Failed: {}", "!".red(), e);
+                remaining.kernel_param_backups = state.kernel_param_backups.clone();
+            }
         }
         println!();
     } else if !state.kernel_params_added.is_empty() {
@@ -201,17 +218,8 @@ mod tests {
         StateFileOverrideGuard
     }
 
-    struct AcpiWakeupPathOverrideGuard;
-
-    impl Drop for AcpiWakeupPathOverrideGuard {
-        fn drop(&mut self) {
-            sysfs_writer::set_acpi_wakeup_path_override_for_tests(None);
-        }
-    }
-
-    fn set_acpi_wakeup_path_override(path: PathBuf) -> AcpiWakeupPathOverrideGuard {
-        sysfs_writer::set_acpi_wakeup_path_override_for_tests(Some(path));
-        AcpiWakeupPathOverrideGuard
+    fn set_acpi_wakeup_path_override(path: PathBuf) -> sysfs_writer::AcpiWakeupPathGuard {
+        sysfs_writer::set_acpi_wakeup_path_override_for_tests(path)
     }
 
     #[test]

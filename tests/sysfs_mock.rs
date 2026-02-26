@@ -242,10 +242,10 @@ fn test_build_plan_skips_abmlevel_at_or_above_3() {
     let tmp = TempDir::new().unwrap();
     create_framework16_fixture(tmp.path());
 
-    // abmlevel=4 is above the threshold — apply should leave it alone (matching audit)
+    // abmlevel=3 is at the threshold — apply should leave it alone (matching audit)
     fs::write(
         tmp.path().join("proc/cmdline"),
-        "root=UUID=abc rw acpi.ec_no_wakeup=1 rtc_cmos.use_acpi_alarm=1 amdgpu.abmlevel=4\n",
+        "root=UUID=abc rw acpi.ec_no_wakeup=1 rtc_cmos.use_acpi_alarm=1 amdgpu.abmlevel=3\n",
     )
     .unwrap();
 
@@ -351,6 +351,7 @@ fn test_apply_plan_only_disables_usb_wake_sources() {
     let plan = apply::build_plan(&hw, &sysfs);
 
     assert!(plan.acpi_wakeup_disable.contains(&"XHC1".to_string()));
+    assert!(plan.acpi_wakeup_disable.contains(&"XHC3".to_string()));
     assert!(!plan.acpi_wakeup_disable.contains(&"XHC0".to_string()));
     assert!(!plan.acpi_wakeup_disable.contains(&"GPP6".to_string()));
     assert!(!plan.acpi_wakeup_disable.contains(&"NHI0".to_string()));

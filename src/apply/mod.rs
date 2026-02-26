@@ -149,7 +149,8 @@ pub fn build_plan(hw: &HardwareInfo, sysfs: &SysfsRoot) -> ApplyPlan {
     };
 
     // CPU: EPP -> balance_power
-    if hw.cpu.epp.as_deref() != Some("balance_power") && hw.cpu.epp.as_deref() != Some("power")
+    if hw.cpu.epp.as_deref() != Some("balance_power")
+        && hw.cpu.epp.as_deref() != Some("power")
         && let Ok(cpus) = sysfs.list_dir("sys/devices/system/cpu")
     {
         for cpu in cpus {
@@ -247,7 +248,10 @@ fn is_service_active_or_enabled(service: &str) -> bool {
 trait ApplyOps {
     fn write_sysfs(&mut self, path: &str, value: &str) -> Result<()>;
     fn toggle_acpi_wakeup(&mut self, device: &str) -> Result<()>;
-    fn add_kernel_params(&mut self, params: &[String]) -> Result<Vec<kernel_params::KernelParamBackup>>;
+    fn add_kernel_params(
+        &mut self,
+        params: &[String],
+    ) -> Result<Vec<kernel_params::KernelParamBackup>>;
     fn disable_service(&mut self, service: &str) -> Result<()>;
     fn generate_service(&mut self, hw: &HardwareInfo, plan: &ApplyPlan) -> Result<PathBuf>;
     fn enable_systemd_service(&mut self) -> Result<()>;
@@ -265,7 +269,10 @@ impl ApplyOps for RealApplyOps {
         sysfs_writer::toggle_acpi_wakeup(device)
     }
 
-    fn add_kernel_params(&mut self, params: &[String]) -> Result<Vec<kernel_params::KernelParamBackup>> {
+    fn add_kernel_params(
+        &mut self,
+        params: &[String],
+    ) -> Result<Vec<kernel_params::KernelParamBackup>> {
         kernel_params::add_kernel_params(params)
     }
 
@@ -303,6 +310,13 @@ fn execute_plan_with_ops(
     dry_run: bool,
     ops: &mut impl ApplyOps,
 ) -> Result<ApplyState> {
+    // Load previous state up front, before any checkpoint can overwrite the file.
+    let previous_state = if !dry_run {
+        ApplyState::load().unwrap_or(None)
+    } else {
+        None
+    };
+
     let mut state = ApplyState {
         timestamp: chrono::Utc::now().to_rfc3339(),
         ..Default::default()
@@ -354,7 +368,6 @@ fn execute_plan_with_ops(
             );
         } else {
             let backups = ops.add_kernel_params(&plan.kernel_params)?;
-            let previous_state = ApplyState::load().unwrap_or(None);
             merge_kernel_param_state(
                 &mut state,
                 &plan.kernel_params,
@@ -602,7 +615,10 @@ mod tests {
             Ok(())
         }
 
-        fn add_kernel_params(&mut self, _params: &[String]) -> Result<Vec<kernel_params::KernelParamBackup>> {
+        fn add_kernel_params(
+            &mut self,
+            _params: &[String],
+        ) -> Result<Vec<kernel_params::KernelParamBackup>> {
             if self.fail_add_kernel_params {
                 return Err(Error::Other("injected kernel params failure".to_string()));
             }
