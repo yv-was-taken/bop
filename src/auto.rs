@@ -83,8 +83,26 @@ fn acquire_lock() -> Option<LockGuard> {
     }
 }
 
+/// Log an auto-switching event to the systemd journal via `logger`.
+fn log_to_journal(outcome: &AutoOutcome) {
+    let (priority, message) = match outcome {
+        AutoOutcome::Applied => ("info", "Battery detected — power optimizations applied"),
+        AutoOutcome::Reverted => ("info", "AC power detected — optimizations reverted"),
+        AutoOutcome::NoOp => (
+            "debug",
+            "No action needed (state already matches power source)",
+        ),
+        AutoOutcome::NoProfile => ("warning", "No hardware profile matched — skipping"),
+        AutoOutcome::NoAcAdapter => ("debug", "No AC adapter detected"),
+    };
+
+    let _ = std::process::Command::new("logger")
+        .args(["-t", "bop", "-p", &format!("user.{}", priority), message])
+        .status();
+}
+
 /// Core auto-switching logic. Called by udev or `bop auto`.
-pub fn run(aggressive: bool) -> Result<AutoOutcome> {
+pub fn run(aggressive: bool, config: &crate::config::BopConfig) -> Result<AutoOutcome> {
     if !nix::unistd::geteuid().is_root() {
         return Err(Error::NotRoot {
             operation: "auto".to_string(),
@@ -100,31 +118,69 @@ pub fn run(aggressive: bool) -> Result<AutoOutcome> {
     let hw = HardwareInfo::detect(&sysfs);
 
     if !hw.ac.found {
-        return Ok(AutoOutcome::NoAcAdapter);
+        let outcome = AutoOutcome::NoAcAdapter;
+        log_to_journal(&outcome);
+        return Ok(outcome);
     }
 
     let profile = crate::profile::detect_profile(&hw);
     if profile.is_none() {
-        return Ok(AutoOutcome::NoProfile);
+        let outcome = AutoOutcome::NoProfile;
+        log_to_journal(&outcome);
+        return Ok(outcome);
     }
 
     let state_exists = ApplyState::load()?.is_some();
 
     if hw.ac.is_on_battery() && !state_exists {
-        // On battery, no optimizations applied — apply them
-        let plan = if aggressive {
-            crate::apply::build_plan_aggressive(&hw, &sysfs)
-        } else {
-            crate::apply::build_plan(&hw, &sysfs)
-        };
-        crate::apply::execute_plan(&plan, &hw, false)?;
-        Ok(AutoOutcome::Applied)
+        // Check inhibitors
+        let inhibitors = crate::inhibitors::check_inhibitors().unwrap_or_default();
+        let scope = crate::inhibitors::should_apply(&config.inhibitors.mode, &inhibitors);
+
+        match scope {
+            crate::inhibitors::ApplyScope::Skip => {
+                let outcome = AutoOutcome::NoOp;
+                log_to_journal(&outcome);
+                return Ok(outcome);
+            }
+            crate::inhibitors::ApplyScope::Reduced => {
+                let plan = crate::apply::build_plan_reduced(&hw, &sysfs);
+                crate::apply::execute_plan(&plan, &hw, false)?;
+            }
+            crate::inhibitors::ApplyScope::Full => {
+                let plan = if aggressive {
+                    crate::apply::build_plan_aggressive(&hw, &sysfs)
+                } else {
+                    crate::apply::build_plan(&hw, &sysfs)
+                };
+                crate::apply::execute_plan(&plan, &hw, false)?;
+            }
+        }
+
+        let outcome = AutoOutcome::Applied;
+        log_to_journal(&outcome);
+
+        // Notification
+        if config.notifications.enabled && config.notifications.on_apply {
+            let _ = crate::notify::send("bop", "Power optimizations applied (on battery)");
+        }
+
+        Ok(outcome)
     } else if hw.ac.is_on_ac() && state_exists {
         // On AC, optimizations applied — revert them
         crate::revert::revert()?;
-        Ok(AutoOutcome::Reverted)
+        let outcome = AutoOutcome::Reverted;
+        log_to_journal(&outcome);
+
+        if config.notifications.enabled && config.notifications.on_revert {
+            let _ = crate::notify::send("bop", "Power optimizations reverted (on AC)");
+        }
+
+        Ok(outcome)
     } else {
-        Ok(AutoOutcome::NoOp)
+        let outcome = AutoOutcome::NoOp;
+        log_to_journal(&outcome);
+        Ok(outcome)
     }
 }
 
@@ -151,7 +207,8 @@ pub fn enable(aggressive: bool) -> Result<()> {
     println!("  Rule installed at {}", UDEV_RULE_PATH);
 
     // Apply immediately if currently on battery
-    match run(aggressive)? {
+    let config = crate::config::load(None);
+    match run(aggressive, &config)? {
         AutoOutcome::Applied => {
             println!("  {} On battery — optimizations applied.", ">>".green());
         }
