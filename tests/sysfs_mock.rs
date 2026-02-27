@@ -1,5 +1,6 @@
 use bop::apply;
 use bop::audit;
+use bop::config::{BopConfig, EppConfig, EppHint, EppThreshold};
 use bop::detect::HardwareInfo;
 use bop::profile;
 use bop::snapshot::Snapshot;
@@ -1570,4 +1571,455 @@ fn test_ac_detection_no_adapter() {
     assert!(!hw.ac.found, "No AC adapter should be found");
     assert!(!hw.ac.is_on_ac());
     assert!(!hw.ac.is_on_battery());
+}
+
+// ---- v0.3.0 feature integration tests ----
+
+/// Add a mock backlight device to an existing fixture.
+fn add_backlight(root: &Path, brightness: u64, max_brightness: u64) {
+    let bl = root.join("sys/class/backlight/amdgpu_bl1");
+    fs::create_dir_all(&bl).unwrap();
+    fs::write(bl.join("brightness"), format!("{}\n", brightness)).unwrap();
+    fs::write(bl.join("max_brightness"), format!("{}\n", max_brightness)).unwrap();
+}
+
+/// Override the battery capacity in the fixture.
+fn set_battery_capacity(root: &Path, percent: u32) {
+    fs::write(
+        root.join("sys/class/power_supply/BAT0/capacity"),
+        format!("{}\n", percent),
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_adaptive_epp_low_battery_uses_power() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+    set_battery_capacity(tmp.path(), 15);
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+
+    let config = BopConfig {
+        epp: EppConfig {
+            adaptive: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let plan = apply::build_plan_with_config(&hw, &sysfs, &config);
+
+    // All EPP writes should target "power" for low battery
+    let epp_writes: Vec<_> = plan
+        .sysfs_writes
+        .iter()
+        .filter(|w| w.path.contains("energy_performance_preference"))
+        .collect();
+    assert!(!epp_writes.is_empty(), "Should have EPP writes");
+    for w in &epp_writes {
+        assert_eq!(w.value, "power", "EPP should be 'power' at 15% battery");
+    }
+}
+
+#[test]
+fn test_adaptive_epp_mid_battery_uses_balance_power() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+    set_battery_capacity(tmp.path(), 35);
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+
+    let config = BopConfig {
+        epp: EppConfig {
+            adaptive: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let plan = apply::build_plan_with_config(&hw, &sysfs, &config);
+
+    let epp_writes: Vec<_> = plan
+        .sysfs_writes
+        .iter()
+        .filter(|w| w.path.contains("energy_performance_preference"))
+        .collect();
+    assert!(!epp_writes.is_empty());
+    for w in &epp_writes {
+        assert_eq!(
+            w.value, "balance_power",
+            "EPP should be 'balance_power' at 35% battery"
+        );
+    }
+}
+
+#[test]
+fn test_adaptive_epp_high_battery_uses_balance_performance() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+    set_battery_capacity(tmp.path(), 85);
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+
+    let config = BopConfig {
+        epp: EppConfig {
+            adaptive: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let plan = apply::build_plan_with_config(&hw, &sysfs, &config);
+
+    // At 85%, EPP = balance_performance, which is the same as the fixture's current value.
+    // So there should be NO EPP writes (no change needed).
+    let epp_writes: Vec<_> = plan
+        .sysfs_writes
+        .iter()
+        .filter(|w| w.path.contains("energy_performance_preference"))
+        .collect();
+    assert!(
+        epp_writes.is_empty(),
+        "No EPP writes expected when adaptive selects same value as current (balance_performance)"
+    );
+}
+
+#[test]
+fn test_adaptive_epp_custom_thresholds() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+    set_battery_capacity(tmp.path(), 40);
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+
+    let config = BopConfig {
+        epp: EppConfig {
+            adaptive: true,
+            thresholds: vec![
+                EppThreshold {
+                    battery_percent: 50,
+                    epp_value: EppHint::Power,
+                },
+                EppThreshold {
+                    battery_percent: 100,
+                    epp_value: EppHint::BalancePower,
+                },
+            ],
+        },
+        ..Default::default()
+    };
+
+    let plan = apply::build_plan_with_config(&hw, &sysfs, &config);
+
+    let epp_writes: Vec<_> = plan
+        .sysfs_writes
+        .iter()
+        .filter(|w| w.path.contains("energy_performance_preference"))
+        .collect();
+    assert!(!epp_writes.is_empty());
+    for w in &epp_writes {
+        assert_eq!(
+            w.value, "power",
+            "Custom thresholds: 40% battery should map to 'power' (threshold at 50%)"
+        );
+    }
+}
+
+#[test]
+fn test_adaptive_epp_disabled_uses_balance_power() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+    set_battery_capacity(tmp.path(), 15);
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+
+    // adaptive = false, even at 15% battery
+    let config = BopConfig::default();
+
+    let plan = apply::build_plan_with_config(&hw, &sysfs, &config);
+
+    let epp_writes: Vec<_> = plan
+        .sysfs_writes
+        .iter()
+        .filter(|w| w.path.contains("energy_performance_preference"))
+        .collect();
+    assert!(!epp_writes.is_empty());
+    for w in &epp_writes {
+        assert_eq!(
+            w.value, "balance_power",
+            "Non-adaptive should always use balance_power"
+        );
+    }
+}
+
+#[test]
+fn test_brightness_dim_and_restore_integration() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+    add_backlight(tmp.path(), 1000, 1000);
+
+    let sysfs = SysfsRoot::new(tmp.path());
+
+    let config = bop::config::BrightnessConfig {
+        auto_dim: true,
+        dim_percent: 60,
+    };
+
+    // Dim
+    let original = bop::brightness::dim(&config, &sysfs).unwrap();
+    assert_eq!(original, Some(1000), "Should return original brightness");
+
+    // Verify brightness was written
+    let bl_path = tmp.path().join("sys/class/backlight/amdgpu_bl1/brightness");
+    let dimmed = fs::read_to_string(&bl_path).unwrap().trim().to_string();
+    assert_eq!(dimmed, "600", "Brightness should be dimmed to 60%");
+
+    // Restore
+    bop::brightness::restore(1000, &sysfs).unwrap();
+    let restored = fs::read_to_string(&bl_path).unwrap().trim().to_string();
+    assert_eq!(
+        restored, "1000",
+        "Brightness should be restored to original"
+    );
+}
+
+#[test]
+fn test_brightness_dim_skipped_when_disabled() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+    add_backlight(tmp.path(), 1000, 1000);
+
+    let sysfs = SysfsRoot::new(tmp.path());
+
+    let config = bop::config::BrightnessConfig {
+        auto_dim: false,
+        dim_percent: 60,
+    };
+
+    let result = bop::brightness::dim(&config, &sysfs).unwrap();
+    assert_eq!(result, None, "Should not dim when auto_dim is false");
+
+    // Verify brightness unchanged
+    let bl_path = tmp.path().join("sys/class/backlight/amdgpu_bl1/brightness");
+    let val = fs::read_to_string(&bl_path).unwrap().trim().to_string();
+    assert_eq!(val, "1000", "Brightness should be unchanged");
+}
+
+#[test]
+fn test_brightness_no_backlight_device() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+    // No backlight added
+
+    let sysfs = SysfsRoot::new(tmp.path());
+
+    let config = bop::config::BrightnessConfig {
+        auto_dim: true,
+        dim_percent: 60,
+    };
+
+    let result = bop::brightness::dim(&config, &sysfs).unwrap();
+    assert_eq!(
+        result, None,
+        "Should return None when no backlight device exists"
+    );
+}
+
+#[test]
+fn test_build_plan_reduced_excludes_persistent_changes() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+
+    let full_plan = apply::build_plan(&hw, &sysfs);
+    let reduced_plan = apply::build_plan_reduced(&hw, &sysfs);
+
+    // Reduced plan should have the same sysfs writes as the full plan
+    assert_eq!(
+        reduced_plan.sysfs_writes.len(),
+        full_plan.sysfs_writes.len(),
+        "Reduced plan should keep all sysfs writes"
+    );
+
+    // Reduced plan should have the same ACPI wakeup disables
+    assert_eq!(
+        reduced_plan.acpi_wakeup_disable.len(),
+        full_plan.acpi_wakeup_disable.len(),
+        "Reduced plan should keep ACPI wakeup disables"
+    );
+
+    // Reduced plan should exclude persistent changes
+    assert!(
+        reduced_plan.kernel_params.is_empty(),
+        "Reduced plan should have no kernel params"
+    );
+    assert!(
+        reduced_plan.services_to_disable.is_empty(),
+        "Reduced plan should have no services to disable"
+    );
+    assert!(
+        !reduced_plan.systemd_service,
+        "Reduced plan should not generate systemd service"
+    );
+    assert!(
+        reduced_plan.modprobe_configs.is_empty(),
+        "Reduced plan should have no modprobe configs"
+    );
+
+    // Full plan should have kernel params (the fixture is missing them)
+    assert!(
+        !full_plan.kernel_params.is_empty(),
+        "Full plan should have kernel params for comparison"
+    );
+}
+
+#[test]
+fn test_apply_state_brightness_original_serialization() {
+    use bop::apply::ApplyState;
+
+    // State with brightness_original set
+    let state = ApplyState {
+        timestamp: "2026-01-01T00:00:00Z".to_string(),
+        brightness_original: Some(1000),
+        ..Default::default()
+    };
+
+    let json = serde_json::to_string_pretty(&state).unwrap();
+    assert!(
+        json.contains("\"brightness_original\": 1000"),
+        "JSON should contain brightness_original"
+    );
+
+    let deserialized: ApplyState = serde_json::from_str(&json).unwrap();
+    assert_eq!(deserialized.brightness_original, Some(1000));
+
+    // State without brightness_original (backwards compat)
+    let old_json = r#"{
+        "timestamp": "2026-01-01T00:00:00Z",
+        "sysfs_changes": [],
+        "kernel_params_added": [],
+        "kernel_param_backups": [],
+        "services_disabled": [],
+        "systemd_units_created": [],
+        "modprobe_files_created": [],
+        "acpi_wakeup_toggled": []
+    }"#;
+    let old_state: ApplyState = serde_json::from_str(old_json).unwrap();
+    assert_eq!(
+        old_state.brightness_original, None,
+        "Missing brightness_original should deserialize as None"
+    );
+}
+
+#[test]
+fn test_config_load_from_file() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = tmp.path().join("config.toml");
+
+    fs::write(
+        &config_path,
+        r#"
+[epp]
+adaptive = true
+
+[[epp.thresholds]]
+battery_percent = 30
+epp_value = "power"
+
+[[epp.thresholds]]
+battery_percent = 100
+epp_value = "balance_power"
+
+[brightness]
+auto_dim = true
+dim_percent = 40
+"#,
+    )
+    .unwrap();
+
+    let config = bop::config::load(Some(&config_path.to_path_buf()));
+
+    assert!(config.epp.adaptive);
+    assert_eq!(config.epp.thresholds.len(), 2);
+    assert_eq!(config.epp.thresholds[0].battery_percent, 30);
+    assert_eq!(config.epp.thresholds[0].epp_value, EppHint::Power);
+    assert!(config.brightness.auto_dim);
+    assert_eq!(config.brightness.dim_percent, 40);
+    // Unset sections should use defaults
+    assert!(!config.notifications.enabled);
+    assert_eq!(config.inhibitors.mode, bop::config::InhibitorMode::Reduced);
+}
+
+#[test]
+fn test_config_default_has_sensible_values() {
+    let config = BopConfig::default();
+
+    // EPP defaults
+    assert!(!config.epp.adaptive);
+    assert_eq!(config.epp.thresholds.len(), 3);
+    assert_eq!(config.epp.thresholds[0].battery_percent, 20);
+    assert_eq!(config.epp.thresholds[0].epp_value, EppHint::Power);
+    assert_eq!(config.epp.thresholds[1].battery_percent, 50);
+    assert_eq!(config.epp.thresholds[1].epp_value, EppHint::BalancePower);
+    assert_eq!(config.epp.thresholds[2].battery_percent, 100);
+    assert_eq!(
+        config.epp.thresholds[2].epp_value,
+        EppHint::BalancePerformance
+    );
+
+    // Brightness defaults
+    assert!(!config.brightness.auto_dim);
+    assert_eq!(config.brightness.dim_percent, 60);
+
+    // Inhibitor defaults
+    assert_eq!(config.inhibitors.mode, bop::config::InhibitorMode::Reduced);
+
+    // Notification defaults
+    assert!(!config.notifications.enabled);
+    assert!(config.notifications.on_apply);
+    assert!(config.notifications.on_revert);
+}
+
+#[test]
+fn test_inhibitor_scope_determines_plan_type() {
+    use bop::inhibitors::{ApplyScope, Inhibitor, should_apply};
+
+    let inhibitor = Inhibitor {
+        who: "Firefox".to_string(),
+        what: "sleep".to_string(),
+        why: "Playing video".to_string(),
+    };
+
+    // Skip mode with inhibitors
+    let scope = should_apply(
+        &bop::config::InhibitorMode::Skip,
+        std::slice::from_ref(&inhibitor),
+    );
+    assert_eq!(scope, ApplyScope::Skip);
+
+    // Reduced mode with inhibitors
+    let scope = should_apply(
+        &bop::config::InhibitorMode::Reduced,
+        std::slice::from_ref(&inhibitor),
+    );
+    assert_eq!(scope, ApplyScope::Reduced);
+
+    // Full mode with inhibitors
+    let scope = should_apply(
+        &bop::config::InhibitorMode::Full,
+        std::slice::from_ref(&inhibitor),
+    );
+    assert_eq!(scope, ApplyScope::Full);
+
+    // Any mode without inhibitors -> Full
+    let scope = should_apply(&bop::config::InhibitorMode::Skip, &[]);
+    assert_eq!(scope, ApplyScope::Full);
 }
