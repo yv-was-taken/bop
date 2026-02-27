@@ -53,6 +53,8 @@ pub struct ApplyState {
     pub systemd_units_created: Vec<String>,
     pub modprobe_files_created: Vec<String>,
     pub acpi_wakeup_toggled: Vec<String>,
+    #[serde(default)]
+    pub brightness_original: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +72,7 @@ impl ApplyState {
             || !self.systemd_units_created.is_empty()
             || !self.modprobe_files_created.is_empty()
             || !self.acpi_wakeup_toggled.is_empty()
+            || self.brightness_original.is_some()
     }
 
     pub(crate) fn file_path() -> PathBuf {

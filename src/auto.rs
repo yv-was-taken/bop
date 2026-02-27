@@ -108,7 +108,8 @@ pub fn run(aggressive: bool, config: &crate::config::BopConfig) -> Result<AutoOu
         return Ok(AutoOutcome::NoProfile);
     }
 
-    let state_exists = ApplyState::load()?.is_some();
+    let existing_state = ApplyState::load()?;
+    let state_exists = existing_state.is_some();
 
     if hw.ac.is_on_battery() && !state_exists {
         // On battery, no optimizations applied — apply them
@@ -117,9 +118,33 @@ pub fn run(aggressive: bool, config: &crate::config::BopConfig) -> Result<AutoOu
         } else {
             crate::apply::build_plan_with_config(&hw, &sysfs, config)
         };
-        crate::apply::execute_plan(&plan, &hw, false)?;
+        let mut state = crate::apply::execute_plan(&plan, &hw, false)?;
+
+        // Dim backlight after applying optimizations
+        if config.brightness.auto_dim {
+            match crate::brightness::dim(&config.brightness, &sysfs) {
+                Ok(original) => {
+                    if original.is_some() {
+                        state.brightness_original = original;
+                        state.save()?;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("{} Failed to dim backlight: {}", "!".yellow(), e);
+                }
+            }
+        }
+
         Ok(AutoOutcome::Applied)
     } else if hw.ac.is_on_ac() && state_exists {
+        // Restore brightness before reverting other changes
+        if let Some(ref state) = existing_state
+            && let Some(original) = state.brightness_original
+            && let Err(e) = crate::brightness::restore(original, &sysfs)
+        {
+            eprintln!("{} Failed to restore backlight: {}", "!".yellow(), e);
+        }
+
         // On AC, optimizations applied — revert them
         crate::revert::revert()?;
         Ok(AutoOutcome::Reverted)

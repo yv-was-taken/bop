@@ -1,6 +1,7 @@
 pub mod apply;
 pub mod audit;
 pub mod auto;
+pub mod brightness;
 pub mod cli;
 pub mod config;
 pub mod detect;
