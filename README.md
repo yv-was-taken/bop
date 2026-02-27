@@ -271,7 +271,7 @@ Auto-switching also handles brightness dimming (if configured) and respects syst
 
 ### Persistence
 
-bop generates a `bop-powersave.service` (systemd oneshot) that re-applies runtime sysfs settings and ACPI wakeup configuration on every boot. Kernel parameters are written to systemd-boot loader entries. Only systemd-boot is currently supported; GRUB and rEFInd users must add kernel parameters manually.
+bop generates a `bop-powersave.service` (systemd oneshot) that re-applies runtime sysfs settings and ACPI wakeup configuration on every boot. Kernel parameters are persisted via the detected bootloader — systemd-boot (`/boot/loader/entries/*.conf`) and GRUB (`/etc/default/grub` + `grub-mkconfig`) are supported. rEFInd users must add kernel parameters manually.
 
 All changes are recorded in `/var/lib/bop/state.json`. Running `sudo bop revert` restores everything to the original state.
 
