@@ -303,7 +303,12 @@ fn cmd_status(json: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_auto(action: Option<AutoAction>, aggressive: bool, config: &BopConfig, json: bool) -> Result<()> {
+fn cmd_auto(
+    action: Option<AutoAction>,
+    aggressive: bool,
+    config: &BopConfig,
+    json: bool,
+) -> Result<()> {
     match action {
         None => {
             // Bare `bop auto` — called by udev

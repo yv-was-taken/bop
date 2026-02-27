@@ -145,9 +145,7 @@ pub fn run(aggressive: bool, config: &crate::config::BopConfig) -> Result<AutoOu
         }
 
         let plan = match scope {
-            crate::inhibitors::ApplyScope::Reduced => {
-                crate::apply::build_plan_reduced(&hw, &sysfs)
-            }
+            crate::inhibitors::ApplyScope::Reduced => crate::apply::build_plan_reduced(&hw, &sysfs),
             _ => {
                 if aggressive {
                     crate::apply::build_plan_aggressive_with_config(&hw, &sysfs, config)
