@@ -36,3 +36,21 @@ toml = "0.8"
 
 [dev-dependencies]
 tempfile = "3"
+
+[package.metadata.deb]
+maintainer = "bop contributors <https://github.com/yv-was-taken/bop>"
+copyright = "2024-2026, bop contributors"
+license-file = ["LICENSE", "0"]
+depends = "iw"
+section = "utils"
+priority = "optional"
+extended-description = """Hardware-aware battery optimization for Linux laptops. \
+Audits your system for power waste, applies fixes, auto-switches on AC/battery, \
+and lets you undo everything. Built for Framework Laptop 16 (AMD Ryzen 7040)."""
+assets = [
+    ["target/release/bop", "usr/bin/", "755"],
+    ["man/*.1", "usr/share/man/man1/", "644"],
+    ["target/completions/bop.bash", "usr/share/bash-completion/completions/bop", "644"],
+    ["target/completions/_bop", "usr/share/zsh/vendor-completions/", "644"],
+    ["target/completions/bop.fish", "usr/share/fish/vendor_completions.d/", "644"],
+]

@@ -79,6 +79,33 @@ git clone https://aur.archlinux.org/bop.git
 cd bop && makepkg -si
 ```
 
+### NixOS / Nix
+
+```bash
+# Try it
+nix run github:yv-was-taken/bop
+
+# Install
+nix profile install github:yv-was-taken/bop
+```
+
+Or add to your flake inputs:
+
+```nix
+{
+  inputs.bop.url = "github:yv-was-taken/bop";
+  # Then add: bop.packages.${system}.default
+}
+```
+
+### Debian / Ubuntu
+
+Download the `.deb` from the [releases page](https://github.com/yv-was-taken/bop/releases):
+
+```bash
+sudo dpkg -i bop_*.deb
+```
+
 ### GitHub releases
 
 Pre-built binaries are available on the [releases page](https://github.com/yv-was-taken/bop/releases).
