@@ -195,8 +195,17 @@ pub fn disable() -> Result<()> {
     Ok(())
 }
 
+/// JSON-serializable representation of auto-switching status.
+#[derive(serde::Serialize)]
+struct AutoStatus {
+    enabled: bool,
+    mode: Option<String>,
+    ac_online: bool,
+    optimizations_applied: bool,
+}
+
 /// Show status of auto-switching.
-pub fn status() -> Result<()> {
+pub fn status(json: bool) -> Result<()> {
     let rule_path = Path::new(UDEV_RULE_PATH);
     let enabled = rule_path.exists();
 
@@ -214,6 +223,23 @@ pub fn status() -> Result<()> {
     let sysfs = SysfsRoot::system();
     let hw = HardwareInfo::detect(&sysfs);
     let state_exists = ApplyState::load().ok().and_then(|s| s).is_some();
+
+    if json {
+        let status = AutoStatus {
+            enabled,
+            mode: if enabled {
+                Some(mode.to_string())
+            } else {
+                None
+            },
+            ac_online: hw.ac.online,
+            optimizations_applied: state_exists,
+        };
+        let json_str = serde_json::to_string_pretty(&status)
+            .map_err(|e| Error::Other(format!("JSON serialization failed: {}", e)))?;
+        println!("{}", json_str);
+        return Ok(());
+    }
 
     println!("{}", "Auto-switching status".bold().underline());
     println!();
@@ -286,5 +312,20 @@ mod tests {
         let rule = udev_rule_content(true);
         assert!(rule.contains("RUN+=\"/usr/bin/bop --aggressive auto\""));
         assert!(rule.contains("--aggressive"));
+    }
+
+    #[test]
+    fn test_auto_status_json_serialization() {
+        let status = AutoStatus {
+            enabled: true,
+            mode: Some("normal".to_string()),
+            ac_online: true,
+            optimizations_applied: false,
+        };
+        let json = serde_json::to_string_pretty(&status).unwrap();
+        assert!(json.contains("\"enabled\": true"));
+        assert!(json.contains("\"mode\": \"normal\""));
+        assert!(json.contains("\"ac_online\": true"));
+        assert!(json.contains("\"optimizations_applied\": false"));
     }
 }

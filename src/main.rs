@@ -14,7 +14,7 @@ fn main() -> Result<()> {
         Command::Monitor => cmd_monitor()?,
         Command::Revert => cmd_revert()?,
         Command::Status => cmd_status(cli.json)?,
-        Command::Auto { action } => cmd_auto(action, cli.aggressive)?,
+        Command::Auto { action } => cmd_auto(action, cli.aggressive, cli.json)?,
         Command::Snapshot { output } => cmd_snapshot(output)?,
         Command::Wake { action } => cmd_wake(action)?,
         Command::Completions { shell } => bop::cli::print_completions(shell),
@@ -301,7 +301,7 @@ fn cmd_status(json: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_auto(action: Option<AutoAction>, aggressive: bool) -> Result<()> {
+fn cmd_auto(action: Option<AutoAction>, aggressive: bool, json: bool) -> Result<()> {
     match action {
         None => {
             // Bare `bop auto` — called by udev
@@ -309,7 +309,7 @@ fn cmd_auto(action: Option<AutoAction>, aggressive: bool) -> Result<()> {
         }
         Some(AutoAction::Enable) => bop::auto::enable(aggressive)?,
         Some(AutoAction::Disable) => bop::auto::disable()?,
-        Some(AutoAction::Status) => bop::auto::status()?,
+        Some(AutoAction::Status) => bop::auto::status(json)?,
     }
     Ok(())
 }
