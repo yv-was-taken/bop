@@ -1,6 +1,6 @@
 # Maintainer: bop contributors
 pkgname=bop
-pkgver=0.2.0
+pkgver=0.3.0
 pkgrel=1
 pkgdesc='Battery Optimization Project - hardware-aware power tuning for Linux laptops'
 arch=('x86_64')

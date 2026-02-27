@@ -1,6 +1,6 @@
 [package]
 name = "bop"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Battery Optimization Project - hardware-aware power tuning for Linux laptops"
 license = "MIT"
