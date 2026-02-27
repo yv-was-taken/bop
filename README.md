@@ -1,8 +1,8 @@
 # bop
 
-Hardware-aware battery optimization for Linux laptops. Audits your system for power waste, applies fixes, and lets you undo everything.
+Hardware-aware battery optimization for Linux laptops. Audits your system for power waste, applies fixes, auto-switches on AC/battery, and lets you undo everything.
 
-Built for Framework Laptop 16 (AMD Ryzen 7040). Single binary, no daemon, no config files.
+Built for Framework Laptop 16 (AMD Ryzen 7040). Single binary, no daemon.
 
 ## Why not TLP?
 
@@ -120,13 +120,24 @@ sudo bop apply
 # Undo everything
 sudo bop revert
 
+# Automatic AC/battery switching via udev
+sudo bop auto enable            # install udev rule
+sudo bop auto disable           # remove udev rule
+bop auto status                 # check auto-switching state
+bop auto status --json          # machine-readable output
+
 # Real-time power monitoring (RAPL + battery)
 bop monitor
 
+# View or generate config
+bop config show                 # print loaded config
+bop config init                 # write default to ~/.config/bop/config.toml
+bop config path                 # show config file locations
+
 # Manage Framework expansion card wakeup sources
 bop wake list
-sudo bop wake scan          # auto-detect and configure
-sudo bop wake enable XHC1   # enable specific controller
+sudo bop wake scan              # auto-detect and configure
+sudo bop wake enable XHC1       # enable specific controller
 
 # Generate shell completions (auto-detects shell)
 bop completions
@@ -135,7 +146,97 @@ bop completions
 bop completions zsh
 ```
 
-JSON output is available for all commands with `--json`.
+JSON output is available for most commands with `--json`.
+
+## Configuration
+
+bop uses a two-tier TOML config system:
+
+1. **System config**: `/etc/bop/config.toml`
+2. **User config**: `~/.config/bop/config.toml`
+
+The user config merges on top of the system config at the TOML table level, so you only need to override what you care about. Generate a starter config with:
+
+```bash
+bop config init
+```
+
+### Example config
+
+```toml
+[epp]
+adaptive = true   # pick EPP based on battery level instead of always balance_power
+
+[[epp.thresholds]]
+battery_percent = 20
+epp_value = "power"              # <=20%: maximum savings
+
+[[epp.thresholds]]
+battery_percent = 50
+epp_value = "balance_power"      # 21-50%: balanced
+
+[[epp.thresholds]]
+battery_percent = 100
+epp_value = "balance_performance" # 51-100%: near-full performance
+
+[brightness]
+auto_dim = true    # dim backlight on battery
+dim_percent = 60   # dim to 60% of current brightness
+
+[inhibitors]
+mode = "reduced"   # "skip", "reduced", or "full"
+                   # reduced: only safe sysfs writes when inhibitors active
+                   # skip: no-op when inhibitors active
+                   # full: ignore inhibitors entirely
+
+[notifications]
+enabled = true     # desktop notifications on apply/revert
+on_apply = true
+on_revert = true
+```
+
+Use `--config /path/to/config.toml` to load a specific config file, overriding the default locations.
+
+### Adaptive EPP
+
+When `epp.adaptive = true`, bop selects the CPU energy performance preference based on current battery level instead of always using `balance_power`. The default thresholds:
+
+| Battery | EPP | Effect |
+|---------|-----|--------|
+| 0-20% | `power` | Maximum battery savings |
+| 21-50% | `balance_power` | Balanced |
+| 51-100% | `balance_performance` | Near-full performance |
+
+### Inhibitor awareness
+
+When systemd inhibitors are active (presentations, downloads, etc.), bop respects them based on the configured mode:
+
+| Mode | Behavior |
+|------|----------|
+| `skip` | No optimizations applied |
+| `reduced` | Only volatile sysfs writes (no service changes, no kernel params) |
+| `full` | Ignore inhibitors entirely |
+
+### Journald logging
+
+All auto-switching events are logged to the systemd journal unconditionally:
+
+```bash
+journalctl -t bop
+```
+
+## Auto-switching
+
+`bop auto enable` installs a udev rule that triggers on power supply changes. When you unplug, bop applies optimizations. When you plug back in, it reverts them. No daemon required.
+
+```bash
+sudo bop auto enable              # normal mode
+sudo bop --aggressive auto enable # aggressive mode (more savings, more tradeoffs)
+sudo bop auto disable             # remove the udev rule
+bop auto status                   # check current state
+```
+
+Auto-switching also handles brightness dimming (if configured) and respects systemd inhibitors.
 
 ## What it changes
 
