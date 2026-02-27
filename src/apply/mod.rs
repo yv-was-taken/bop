@@ -198,6 +198,19 @@ pub fn build_plan_aggressive_with_config(
     build_plan_with_opts(hw, sysfs, true, Some(config))
 }
 
+/// Build a reduced plan: only volatile sysfs writes, no persistent changes.
+pub fn build_plan_reduced(hw: &HardwareInfo, sysfs: &SysfsRoot) -> ApplyPlan {
+    let full = build_plan(hw, sysfs);
+    ApplyPlan {
+        sysfs_writes: full.sysfs_writes,
+        kernel_params: Vec::new(),
+        services_to_disable: Vec::new(),
+        acpi_wakeup_disable: full.acpi_wakeup_disable,
+        systemd_service: false,
+        modprobe_configs: Vec::new(),
+    }
+}
+
 fn build_plan_with_opts(
     hw: &HardwareInfo,
     sysfs: &SysfsRoot,
