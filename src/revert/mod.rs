@@ -1,5 +1,6 @@
 use crate::apply::{self, ApplyState};
 use crate::error::{Error, Result};
+use crate::sysfs::SysfsRoot;
 use colored::Colorize;
 
 pub fn revert() -> Result<()> {
@@ -89,6 +90,7 @@ fn has_pending_reverts(state: &ApplyState) -> bool {
         || !state.kernel_params_added.is_empty()
         || !state.services_disabled.is_empty()
         || !state.systemd_units_created.is_empty()
+        || state.brightness_original.is_some()
 }
 
 fn revert_steps(state: &ApplyState) -> ApplyState {
@@ -96,6 +98,28 @@ fn revert_steps(state: &ApplyState) -> ApplyState {
         timestamp: state.timestamp.clone(),
         ..Default::default()
     };
+
+    // Restore backlight brightness
+    if let Some(original) = state.brightness_original {
+        let sysfs = SysfsRoot::system();
+        match crate::brightness::restore(original, &sysfs) {
+            Ok(()) => {
+                println!(
+                    "  {} Restored backlight brightness to {}",
+                    ">>".cyan(),
+                    original
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "     {} Failed to restore backlight brightness: {}",
+                    "!".red(),
+                    e
+                );
+                remaining.brightness_original = Some(original);
+            }
+        }
+    }
 
     // Revert sysfs changes
     if !state.sysfs_changes.is_empty() {
