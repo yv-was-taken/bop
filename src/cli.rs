@@ -1,5 +1,6 @@
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(
@@ -21,6 +22,10 @@ pub struct Cli {
     /// latency, or reduced performance.
     #[arg(long, global = true)]
     pub aggressive: bool,
+
+    /// Path to config file (overrides system/user configs)
+    #[arg(long, global = true)]
+    pub config: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
