@@ -1,0 +1,79 @@
+name: Publish to AUR
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  aur-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract version from release tag
+        id: version
+        run: |
+          # Strip 'v' prefix if present
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Publishing version: $VERSION"
+
+      - name: Download release tarball and compute sha256
+        id: checksum
+        run: |
+          TARBALL_URL="https://github.com/${{ github.repository }}/archive/refs/tags/${{ github.ref_name }}.tar.gz"
+          curl -sL "$TARBALL_URL" -o release.tar.gz
+          SHA256=$(sha256sum release.tar.gz | awk '{print $1}')
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+          echo "SHA256: $SHA256"
+
+      - name: Update PKGBUILD
+        run: |
+          cd pkg/aur
+          sed -i "s/^pkgver=.*/pkgver=${{ steps.version.outputs.version }}/" PKGBUILD
+          sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
+          sed -i "s/^sha256sums=.*/sha256sums=('${{ steps.checksum.outputs.sha256 }}')/" PKGBUILD
+
+      - name: Generate .SRCINFO
+        uses: docker://archlinux:latest
+        with:
+          args: >-
+            bash -c "
+            pacman -Sy --noconfirm base-devel &&
+            useradd -m builder &&
+            cp -r pkg/aur /home/builder/aur &&
+            chown -R builder: /home/builder/aur &&
+            su builder -c 'cd /home/builder/aur && makepkg --printsrcinfo > .SRCINFO' &&
+            cp /home/builder/aur/.SRCINFO pkg/aur/.SRCINFO
+            "
+
+      - name: Publish to AUR
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+        run: |
+          # Set up SSH for AUR
+          mkdir -p ~/.ssh
+          echo "$AUR_SSH_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          printf '%s\n' \
+            "Host aur.archlinux.org" \
+            "  IdentityFile ~/.ssh/aur" \
+            "  User aur" \
+            "  StrictHostKeyChecking accept-new" \
+            >> ~/.ssh/config
+
+          # Clone AUR repo
+          git clone ssh://aur@aur.archlinux.org/bop.git /tmp/aur-bop
+
+          # Copy updated files
+          cp pkg/aur/PKGBUILD /tmp/aur-bop/
+          cp pkg/aur/.SRCINFO /tmp/aur-bop/
+
+          # Commit and push
+          cd /tmp/aur-bop
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add PKGBUILD .SRCINFO
+          git diff --cached --quiet || git commit -m "Update to ${{ steps.version.outputs.version }}"
+          git push
