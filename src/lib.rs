@@ -2,6 +2,7 @@ pub mod apply;
 pub mod audit;
 pub mod auto;
 pub mod cli;
+pub mod config;
 pub mod detect;
 pub mod error;
 pub mod monitor;

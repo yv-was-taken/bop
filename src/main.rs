@@ -1,5 +1,6 @@
 use anyhow::Result;
 use bop::cli::{AutoAction, Cli, Command, WakeAction};
+use bop::config::BopConfig;
 use bop::detect::HardwareInfo;
 use bop::sysfs::SysfsRoot;
 use clap::Parser;
@@ -7,6 +8,7 @@ use colored::Colorize;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let config = bop::config::load(cli.config.as_ref());
 
     match cli.command {
         Command::Audit => cmd_audit(cli.json, cli.aggressive)?,
@@ -14,7 +16,7 @@ fn main() -> Result<()> {
         Command::Monitor => cmd_monitor()?,
         Command::Revert => cmd_revert()?,
         Command::Status => cmd_status(cli.json)?,
-        Command::Auto { action } => cmd_auto(action, cli.aggressive)?,
+        Command::Auto { action } => cmd_auto(action, cli.aggressive, &config)?,
         Command::Snapshot { output } => cmd_snapshot(output)?,
         Command::Wake { action } => cmd_wake(action)?,
         Command::Completions { shell } => bop::cli::print_completions(shell),
@@ -301,11 +303,11 @@ fn cmd_status(json: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_auto(action: Option<AutoAction>, aggressive: bool) -> Result<()> {
+fn cmd_auto(action: Option<AutoAction>, aggressive: bool, config: &BopConfig) -> Result<()> {
     match action {
         None => {
             // Bare `bop auto` — called by udev
-            bop::auto::run(aggressive)?;
+            bop::auto::run(aggressive, config)?;
         }
         Some(AutoAction::Enable) => bop::auto::enable(aggressive)?,
         Some(AutoAction::Disable) => bop::auto::disable()?,
