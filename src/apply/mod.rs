@@ -3,6 +3,7 @@ pub mod services;
 pub mod sysfs_writer;
 pub mod systemd;
 
+use crate::config::{BopConfig, EppConfig};
 use crate::detect::HardwareInfo;
 use crate::error::{Error, Result};
 use crate::sysfs::SysfsRoot;
@@ -138,17 +139,68 @@ pub struct ModprobeConfig {
     pub content: String,
 }
 
+/// Resolve the EPP string based on config and battery percentage.
+///
+/// When adaptive is true and battery_percent is available, iterates thresholds
+/// (sorted ascending by battery_percent) and returns the first match where
+/// `battery_percent <= threshold.battery_percent`. When adaptive is false or
+/// battery_percent is None, returns `"balance_power"` (existing behavior).
+pub fn resolve_epp(epp_config: &EppConfig, battery_percent: Option<u32>) -> String {
+    if !epp_config.adaptive {
+        return "balance_power".to_string();
+    }
+
+    let Some(percent) = battery_percent else {
+        return "balance_power".to_string();
+    };
+
+    let mut thresholds = epp_config.thresholds.clone();
+    thresholds.sort_by_key(|t| t.battery_percent);
+
+    for threshold in &thresholds {
+        if percent <= threshold.battery_percent as u32 {
+            return threshold.epp_value.to_string();
+        }
+    }
+
+    // If no threshold matched (shouldn't happen with a 100% entry), fall back
+    "balance_power".to_string()
+}
+
 /// Build the plan of changes based on audit findings.
 pub fn build_plan(hw: &HardwareInfo, sysfs: &SysfsRoot) -> ApplyPlan {
-    build_plan_with_opts(hw, sysfs, false)
+    build_plan_with_opts(hw, sysfs, false, None)
 }
 
 /// Build the plan with aggressive optimizations enabled.
 pub fn build_plan_aggressive(hw: &HardwareInfo, sysfs: &SysfsRoot) -> ApplyPlan {
-    build_plan_with_opts(hw, sysfs, true)
+    build_plan_with_opts(hw, sysfs, true, None)
 }
 
-fn build_plan_with_opts(hw: &HardwareInfo, sysfs: &SysfsRoot, aggressive: bool) -> ApplyPlan {
+/// Build the plan using config for adaptive EPP selection.
+pub fn build_plan_with_config(
+    hw: &HardwareInfo,
+    sysfs: &SysfsRoot,
+    config: &BopConfig,
+) -> ApplyPlan {
+    build_plan_with_opts(hw, sysfs, false, Some(config))
+}
+
+/// Build the plan with aggressive optimizations and config for adaptive EPP.
+pub fn build_plan_aggressive_with_config(
+    hw: &HardwareInfo,
+    sysfs: &SysfsRoot,
+    config: &BopConfig,
+) -> ApplyPlan {
+    build_plan_with_opts(hw, sysfs, true, Some(config))
+}
+
+fn build_plan_with_opts(
+    hw: &HardwareInfo,
+    sysfs: &SysfsRoot,
+    aggressive: bool,
+    config: Option<&BopConfig>,
+) -> ApplyPlan {
     let mut plan = ApplyPlan {
         sysfs_writes: Vec::new(),
         kernel_params: Vec::new(),
@@ -158,8 +210,13 @@ fn build_plan_with_opts(hw: &HardwareInfo, sysfs: &SysfsRoot, aggressive: bool) 
         modprobe_configs: Vec::new(),
     };
 
-    // CPU: EPP -> balance_power
-    if hw.cpu.epp.as_deref() != Some("balance_power")
+    // CPU: EPP — use adaptive resolution when config is provided, otherwise balance_power
+    let target_epp = match config {
+        Some(cfg) if cfg.epp.adaptive => resolve_epp(&cfg.epp, hw.battery.capacity_percent),
+        _ => "balance_power".to_string(),
+    };
+
+    if hw.cpu.epp.as_deref() != Some(&target_epp)
         && hw.cpu.epp.as_deref() != Some("power")
         && let Ok(cpus) = sysfs.list_dir("sys/devices/system/cpu")
     {
@@ -172,8 +229,8 @@ fn build_plan_with_opts(hw: &HardwareInfo, sysfs: &SysfsRoot, aggressive: bool) 
                 if sysfs.exists(&path) {
                     plan.sysfs_writes.push(PlannedSysfsWrite {
                         path: format!("/{}", path),
-                        value: "balance_power".to_string(),
-                        description: format!("Set {} EPP to balance_power", cpu),
+                        value: target_epp.clone(),
+                        description: format!("Set {} EPP to {}", cpu, target_epp),
                     });
                 }
             }
@@ -1054,5 +1111,45 @@ mod tests {
 
         assert_eq!(state.kernel_param_backups.len(), 1);
         assert_eq!(state.kernel_param_backups[0], new_backup);
+    }
+
+    fn adaptive_epp_config() -> EppConfig {
+        EppConfig {
+            adaptive: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_resolve_epp_adaptive_low_battery() {
+        let config = adaptive_epp_config();
+        assert_eq!(resolve_epp(&config, Some(15)), "power");
+    }
+
+    #[test]
+    fn test_resolve_epp_adaptive_mid_battery() {
+        let config = adaptive_epp_config();
+        assert_eq!(resolve_epp(&config, Some(35)), "balance_power");
+    }
+
+    #[test]
+    fn test_resolve_epp_adaptive_high_battery() {
+        let config = adaptive_epp_config();
+        assert_eq!(resolve_epp(&config, Some(75)), "balance_performance");
+    }
+
+    #[test]
+    fn test_resolve_epp_adaptive_disabled() {
+        let config = EppConfig {
+            adaptive: false,
+            ..Default::default()
+        };
+        assert_eq!(resolve_epp(&config, Some(75)), "balance_power");
+    }
+
+    #[test]
+    fn test_resolve_epp_adaptive_no_battery() {
+        let config = adaptive_epp_config();
+        assert_eq!(resolve_epp(&config, None), "balance_power");
     }
 }

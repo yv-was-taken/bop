@@ -84,7 +84,7 @@ fn acquire_lock() -> Option<LockGuard> {
 }
 
 /// Core auto-switching logic. Called by udev or `bop auto`.
-pub fn run(aggressive: bool, _config: &crate::config::BopConfig) -> Result<AutoOutcome> {
+pub fn run(aggressive: bool, config: &crate::config::BopConfig) -> Result<AutoOutcome> {
     if !nix::unistd::geteuid().is_root() {
         return Err(Error::NotRoot {
             operation: "auto".to_string(),
@@ -113,9 +113,9 @@ pub fn run(aggressive: bool, _config: &crate::config::BopConfig) -> Result<AutoO
     if hw.ac.is_on_battery() && !state_exists {
         // On battery, no optimizations applied — apply them
         let plan = if aggressive {
-            crate::apply::build_plan_aggressive(&hw, &sysfs)
+            crate::apply::build_plan_aggressive_with_config(&hw, &sysfs, config)
         } else {
-            crate::apply::build_plan(&hw, &sysfs)
+            crate::apply::build_plan_with_config(&hw, &sysfs, config)
         };
         crate::apply::execute_plan(&plan, &hw, false)?;
         Ok(AutoOutcome::Applied)
