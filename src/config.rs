@@ -141,7 +141,25 @@ impl Default for NotificationConfig {
     }
 }
 
-const SYSTEM_CONFIG: &str = "/etc/bop/config.toml";
+pub const SYSTEM_CONFIG: &str = "/etc/bop/config.toml";
+
+/// Return the user config path (~/.config/bop/config.toml).
+pub fn user_config_path() -> Option<PathBuf> {
+    dirs::config_dir().map(|d| d.join("bop").join("config.toml"))
+}
+
+/// Generate a default config file as a TOML string with comments.
+pub fn default_config_toml() -> String {
+    let header = "\
+# bop configuration
+# System config: /etc/bop/config.toml
+# User config:   ~/.config/bop/config.toml
+# User config merges on top of system config at the table level.
+";
+    let body = toml::to_string_pretty(&BopConfig::default())
+        .unwrap_or_else(|_| String::from("# failed to serialize defaults\n"));
+    format!("{}\n{}", header, body)
+}
 
 /// Load the system config file if it exists.
 fn load_system() -> Option<toml::Value> {

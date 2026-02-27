@@ -1,5 +1,5 @@
 use anyhow::Result;
-use bop::cli::{AutoAction, Cli, Command, WakeAction};
+use bop::cli::{AutoAction, Cli, Command, ConfigAction, WakeAction};
 use bop::config::BopConfig;
 use bop::detect::HardwareInfo;
 use bop::sysfs::SysfsRoot;
@@ -19,6 +19,7 @@ fn main() -> Result<()> {
         Command::Auto { action } => cmd_auto(action, cli.aggressive, &config, cli.json)?,
         Command::Snapshot { output } => cmd_snapshot(output)?,
         Command::Wake { action } => cmd_wake(action)?,
+        Command::Config { action } => cmd_config(action, &config)?,
         Command::Completions { shell } => bop::cli::print_completions(shell),
     }
 
@@ -350,6 +351,59 @@ fn cmd_wake(action: WakeAction) -> Result<()> {
         WakeAction::Enable { controller } => bop::wake::enable(&controller)?,
         WakeAction::Disable { controller } => bop::wake::disable(&controller)?,
         WakeAction::Scan => bop::wake::scan()?,
+    }
+    Ok(())
+}
+
+fn cmd_config(action: ConfigAction, config: &BopConfig) -> Result<()> {
+    match action {
+        ConfigAction::Show => {
+            let toml_str = toml::to_string_pretty(config)?;
+            println!("{}", toml_str);
+        }
+        ConfigAction::Init => {
+            let path = bop::config::user_config_path()
+                .ok_or_else(|| anyhow::anyhow!("Could not determine user config directory"))?;
+
+            if path.exists() {
+                anyhow::bail!(
+                    "Config already exists at {}. Remove it first to regenerate.",
+                    path.display()
+                );
+            }
+
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+
+            let content = bop::config::default_config_toml();
+            std::fs::write(&path, content)?;
+            println!("Config written to {}", path.display());
+        }
+        ConfigAction::Path => {
+            let sys = std::path::Path::new(bop::config::SYSTEM_CONFIG);
+            let user = bop::config::user_config_path();
+
+            println!("{}", "Config file locations".bold());
+            println!();
+            print!("  {} {}", "System:".bold(), sys.display());
+            if sys.exists() {
+                println!(" {}", "(found)".green());
+            } else {
+                println!(" {}", "(not found)".dimmed());
+            }
+
+            if let Some(ref user_path) = user {
+                print!("  {}   {}", "User:".bold(), user_path.display());
+                if user_path.exists() {
+                    println!(" {}", "(found)".green());
+                } else {
+                    println!(" {}", "(not found)".dimmed());
+                }
+            } else {
+                println!("  {}   {}", "User:".bold(), "unknown".dimmed());
+            }
+        }
     }
     Ok(())
 }

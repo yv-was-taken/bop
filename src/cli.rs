@@ -68,11 +68,27 @@ pub enum Command {
         output: Option<String>,
     },
 
+    /// View or generate configuration
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+
     /// Generate shell completions
     Completions {
         /// Shell to generate completions for (auto-detected if omitted)
         shell: Option<Shell>,
     },
+}
+
+#[derive(Subcommand)]
+pub enum ConfigAction {
+    /// Print the loaded (merged) configuration
+    Show,
+    /// Write default config to ~/.config/bop/config.toml
+    Init,
+    /// Show config file locations and which exist
+    Path,
 }
 
 #[derive(Subcommand)]
