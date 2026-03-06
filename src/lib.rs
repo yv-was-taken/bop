@@ -10,6 +10,7 @@ pub mod inhibitors;
 pub mod monitor;
 pub mod notify;
 pub mod output;
+pub mod preset;
 pub mod profile;
 pub mod revert;
 pub mod snapshot;

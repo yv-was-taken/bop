@@ -6,6 +6,7 @@ pub mod systemd;
 use crate::config::{BopConfig, EppConfig};
 use crate::detect::HardwareInfo;
 use crate::error::{Error, Result};
+use crate::preset::{PlatformProfilePolicy, PresetKnobs, UsbPolicy};
 use crate::sysfs::SysfsRoot;
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
@@ -129,6 +130,19 @@ pub struct ApplyPlan {
     pub modprobe_configs: Vec<ModprobeConfig>,
 }
 
+impl ApplyPlan {
+    /// Returns true if the plan contains no actions.
+    /// Note: `systemd_service` is excluded because it only triggers when
+    /// sysfs_writes is non-empty (it's a dependent flag, not an independent action).
+    pub fn is_empty(&self) -> bool {
+        self.sysfs_writes.is_empty()
+            && self.kernel_params.is_empty()
+            && self.services_to_disable.is_empty()
+            && self.acpi_wakeup_disable.is_empty()
+            && self.modprobe_configs.is_empty()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PlannedSysfsWrite {
     pub path: String,
@@ -142,65 +156,53 @@ pub struct ModprobeConfig {
     pub content: String,
 }
 
-/// Resolve the EPP string based on config and battery percentage.
+/// Resolve the EPP string based on config and knobs.
 ///
-/// When adaptive is true and battery_percent is available, iterates thresholds
-/// (sorted ascending by battery_percent) and returns the first match where
-/// `battery_percent <= threshold.battery_percent`. When adaptive is false or
-/// battery_percent is None, returns `"balance_power"` (existing behavior).
-pub fn resolve_epp(epp_config: &EppConfig, battery_percent: Option<u32>) -> String {
-    if !epp_config.adaptive {
-        return "balance_power".to_string();
-    }
+/// When adaptive is true (from config) and battery_percent is available,
+/// iterates thresholds — unless an explicit EPP override is set in config,
+/// in which case the override (already applied to knobs) takes precedence.
+pub fn resolve_epp(
+    epp_config: &EppConfig,
+    battery_percent: Option<u32>,
+    knobs: &PresetKnobs,
+    has_epp_override: bool,
+) -> Option<String> {
+    if !has_epp_override
+        && epp_config.adaptive
+        && let Some(percent) = battery_percent
+    {
+        let mut thresholds = epp_config.thresholds.clone();
+        thresholds.sort_by_key(|t| t.battery_percent);
 
-    let Some(percent) = battery_percent else {
-        return "balance_power".to_string();
-    };
-
-    let mut thresholds = epp_config.thresholds.clone();
-    thresholds.sort_by_key(|t| t.battery_percent);
-
-    for threshold in &thresholds {
-        if percent <= threshold.battery_percent as u32 {
-            return threshold.epp_value.to_string();
+        for threshold in &thresholds {
+            if percent <= threshold.battery_percent as u32 {
+                return Some(threshold.epp_value.to_string());
+            }
         }
     }
 
-    // If no threshold matched (shouldn't happen with a 100% entry), fall back
-    "balance_power".to_string()
+    // Fall back to the preset's EPP value (None for off/default)
+    knobs.epp.as_deref().map(|s| s.to_string())
 }
 
-/// Build the plan of changes based on audit findings.
-pub fn build_plan(hw: &HardwareInfo, sysfs: &SysfsRoot) -> ApplyPlan {
-    build_plan_with_opts(hw, sysfs, false, None)
-}
-
-/// Build the plan with aggressive optimizations enabled.
-pub fn build_plan_aggressive(hw: &HardwareInfo, sysfs: &SysfsRoot) -> ApplyPlan {
-    build_plan_with_opts(hw, sysfs, true, None)
-}
-
-/// Build the plan using config for adaptive EPP selection.
-pub fn build_plan_with_config(
+/// Build the plan of changes using preset knobs.
+pub fn build_plan(
     hw: &HardwareInfo,
     sysfs: &SysfsRoot,
-    config: &BopConfig,
+    knobs: &PresetKnobs,
+    config: Option<&BopConfig>,
 ) -> ApplyPlan {
-    build_plan_with_opts(hw, sysfs, false, Some(config))
-}
-
-/// Build the plan with aggressive optimizations and config for adaptive EPP.
-pub fn build_plan_aggressive_with_config(
-    hw: &HardwareInfo,
-    sysfs: &SysfsRoot,
-    config: &BopConfig,
-) -> ApplyPlan {
-    build_plan_with_opts(hw, sysfs, true, Some(config))
+    build_plan_inner(hw, sysfs, knobs, config)
 }
 
 /// Build a reduced plan: only volatile sysfs writes, no persistent changes.
-pub fn build_plan_reduced(hw: &HardwareInfo, sysfs: &SysfsRoot) -> ApplyPlan {
-    let full = build_plan(hw, sysfs);
+pub fn build_plan_reduced(
+    hw: &HardwareInfo,
+    sysfs: &SysfsRoot,
+    knobs: &PresetKnobs,
+    config: Option<&BopConfig>,
+) -> ApplyPlan {
+    let full = build_plan(hw, sysfs, knobs, config);
     ApplyPlan {
         sysfs_writes: full.sysfs_writes,
         kernel_params: Vec::new(),
@@ -211,10 +213,10 @@ pub fn build_plan_reduced(hw: &HardwareInfo, sysfs: &SysfsRoot) -> ApplyPlan {
     }
 }
 
-fn build_plan_with_opts(
+fn build_plan_inner(
     hw: &HardwareInfo,
     sysfs: &SysfsRoot,
-    aggressive: bool,
+    knobs: &PresetKnobs,
     config: Option<&BopConfig>,
 ) -> ApplyPlan {
     let mut plan = ApplyPlan {
@@ -226,14 +228,19 @@ fn build_plan_with_opts(
         modprobe_configs: Vec::new(),
     };
 
-    // CPU: EPP — use adaptive resolution when config is provided, otherwise balance_power
-    let target_epp = match config {
-        Some(cfg) if cfg.epp.adaptive => resolve_epp(&cfg.epp, hw.battery.capacity_percent),
-        _ => "balance_power".to_string(),
+    // CPU: EPP — only consult adaptive config when the preset enables EPP
+    let target_epp = if knobs.epp.is_some() {
+        config
+            .map(|c| &c.epp)
+            .and_then(|epp_cfg| resolve_epp(epp_cfg, hw.battery.capacity_percent, knobs, knobs.epp_locked))
+            .or_else(|| knobs.epp.as_deref().map(|s| s.to_string()))
+    } else {
+        None
     };
 
-    if hw.cpu.epp.as_deref() != Some(&target_epp)
-        && hw.cpu.epp.as_deref() != Some("power")
+    if let Some(ref target_epp) = target_epp
+        && hw.cpu.epp.as_deref() != Some(target_epp)
+        && (knobs.epp_locked || hw.cpu.epp.as_deref() != Some("power"))
         && let Ok(cpus) = sysfs.list_dir("sys/devices/system/cpu")
     {
         for cpu in cpus {
@@ -254,63 +261,62 @@ fn build_plan_with_opts(
     }
 
     // Platform profile
-    if aggressive {
-        // Aggressive: always set to low-power
-        if hw.platform.platform_profile.as_deref() != Some("low-power") {
-            plan.sysfs_writes.push(PlannedSysfsWrite {
-                path: "/sys/firmware/acpi/platform_profile".to_string(),
-                value: "low-power".to_string(),
-                description: "Set platform profile to low-power".to_string(),
-            });
+    match knobs.platform_profile {
+        PlatformProfilePolicy::ForceLowPower => {
+            if hw.platform.platform_profile.as_deref() != Some("low-power") {
+                plan.sysfs_writes.push(PlannedSysfsWrite {
+                    path: "/sys/firmware/acpi/platform_profile".to_string(),
+                    value: "low-power".to_string(),
+                    description: "Set platform profile to low-power".to_string(),
+                });
+            }
         }
-    } else {
-        // Normal: only fix performance -> low-power, leave balanced alone
-        if hw.platform.platform_profile.as_deref() == Some("performance") {
-            plan.sysfs_writes.push(PlannedSysfsWrite {
-                path: "/sys/firmware/acpi/platform_profile".to_string(),
-                value: "low-power".to_string(),
-                description: "Set platform profile to low-power".to_string(),
-            });
+        PlatformProfilePolicy::FixPerformance => {
+            if hw.platform.platform_profile.as_deref() == Some("performance") {
+                plan.sysfs_writes.push(PlannedSysfsWrite {
+                    path: "/sys/firmware/acpi/platform_profile".to_string(),
+                    value: "low-power".to_string(),
+                    description: "Set platform profile to low-power".to_string(),
+                });
+            }
         }
+        PlatformProfilePolicy::NoChange => {}
     }
 
     // ASPM
-    if aggressive {
-        // Aggressive: powersupersave (deepest L1.1/L1.2 substates)
-        if hw.pci.aspm_policy.as_deref() != Some("powersupersave") {
+    if let Some(ref target_aspm) = knobs.aspm_policy {
+        let current = hw.pci.aspm_policy.as_deref();
+        let target: &str = target_aspm;
+        let needs_change = match target {
+            "powersave" => !matches!(current, Some("powersave" | "powersupersave")),
+            other => current != Some(other),
+        };
+        if needs_change {
             plan.sysfs_writes.push(PlannedSysfsWrite {
                 path: "/sys/module/pcie_aspm/parameters/policy".to_string(),
-                value: "powersupersave".to_string(),
-                description: "Set PCIe ASPM policy to powersupersave (aggressive)".to_string(),
-            });
-        }
-    } else {
-        // Normal: powersave (safe L0s + L1)
-        if !matches!(
-            hw.pci.aspm_policy.as_deref(),
-            Some("powersave" | "powersupersave")
-        ) {
-            plan.sysfs_writes.push(PlannedSysfsWrite {
-                path: "/sys/module/pcie_aspm/parameters/policy".to_string(),
-                value: "powersave".to_string(),
-                description: "Set PCIe ASPM policy to powersave".to_string(),
+                value: target_aspm.to_string(),
+                description: format!("Set PCIe ASPM policy to {}", target_aspm),
             });
         }
     }
 
     // PCI runtime PM -> auto
-    for dev in &hw.pci.devices {
-        if dev.runtime_pm.as_deref() != Some("auto") {
-            plan.sysfs_writes.push(PlannedSysfsWrite {
-                path: format!("/sys/bus/pci/devices/{}/power/control", dev.address),
-                value: "auto".to_string(),
-                description: format!("Enable runtime PM for PCI {}", dev.address),
-            });
+    if knobs.pci_runtime_pm {
+        for dev in &hw.pci.devices {
+            if dev.runtime_pm.as_deref() != Some("auto") {
+                plan.sysfs_writes.push(PlannedSysfsWrite {
+                    path: format!("/sys/bus/pci/devices/{}/power/control", dev.address),
+                    value: "auto".to_string(),
+                    description: format!("Enable runtime PM for PCI {}", dev.address),
+                });
+            }
         }
     }
 
     // USB autosuspend -> auto
-    if let Ok(devices) = sysfs.list_dir("sys/bus/usb/devices") {
+    if knobs.usb_autosuspend != UsbPolicy::NoChange
+        && let Ok(devices) = sysfs.list_dir("sys/bus/usb/devices")
+    {
         for device in devices {
             if device.contains(':') {
                 continue;
@@ -319,8 +325,7 @@ fn build_plan_with_opts(
             if let Some(val) = sysfs.read_optional(&path).unwrap_or(None)
                 && val != "auto"
             {
-                // Normal mode: skip input devices and expansion cards
-                if !aggressive {
+                if knobs.usb_autosuspend == UsbPolicy::SkipInputExpansion {
                     let product = sysfs
                         .read_optional(format!("sys/bus/usb/devices/{}/product", device))
                         .unwrap_or(None)
@@ -350,9 +355,10 @@ fn build_plan_with_opts(
     }
 
     // Audio power save
-    if let Some(val) = sysfs
-        .read_optional("sys/module/snd_hda_intel/parameters/power_save")
-        .unwrap_or(None)
+    if knobs.audio_power_save
+        && let Some(val) = sysfs
+            .read_optional("sys/module/snd_hda_intel/parameters/power_save")
+            .unwrap_or(None)
         && val != "1"
     {
         plan.sysfs_writes.push(PlannedSysfsWrite {
@@ -361,9 +367,10 @@ fn build_plan_with_opts(
             description: "Set HDA audio power save timeout to 1 second".to_string(),
         });
     }
-    if let Some(val) = sysfs
-        .read_optional("sys/module/snd_hda_intel/parameters/power_save_controller")
-        .unwrap_or(None)
+    if knobs.audio_power_save
+        && let Some(val) = sysfs
+            .read_optional("sys/module/snd_hda_intel/parameters/power_save_controller")
+            .unwrap_or(None)
         && val == "N"
     {
         plan.sysfs_writes.push(PlannedSysfsWrite {
@@ -374,7 +381,8 @@ fn build_plan_with_opts(
     }
 
     // GPU DPM -> auto
-    if hw.gpu.is_amd()
+    if knobs.gpu_dpm
+        && hw.gpu.is_amd()
         && let Some(ref card_path) = hw.gpu.card_path
         && let Some(ref dpm) = hw.gpu.dpm_level
         && dpm != "auto"
@@ -386,19 +394,28 @@ fn build_plan_with_opts(
         });
     }
 
-    // Aggressive: disable CPU turbo boost
-    if aggressive && hw.cpu.has_boost && hw.cpu.boost_enabled {
+    // Turbo boost
+    if let Some(desired) = knobs.turbo_boost
+        && hw.cpu.has_boost
+        && hw.cpu.boost_enabled != desired
+    {
+        let (value, description) = if desired {
+            ("1", "Enable CPU turbo boost")
+        } else {
+            ("0", "Disable CPU turbo boost")
+        };
         plan.sysfs_writes.push(PlannedSysfsWrite {
             path: "/sys/devices/system/cpu/cpufreq/boost".to_string(),
-            value: "0".to_string(),
-            description: "Disable CPU turbo boost (aggressive)".to_string(),
+            value: value.to_string(),
+            description: description.to_string(),
         });
     }
 
     // NMI watchdog -> disable
-    if let Some(val) = sysfs
-        .read_optional("proc/sys/kernel/nmi_watchdog")
-        .unwrap_or(None)
+    if knobs.nmi_watchdog_disable
+        && let Some(val) = sysfs
+            .read_optional("proc/sys/kernel/nmi_watchdog")
+            .unwrap_or(None)
         && val == "1"
     {
         plan.sysfs_writes.push(PlannedSysfsWrite {
@@ -408,48 +425,54 @@ fn build_plan_with_opts(
         });
     }
 
-    // Dirty writeback interval -> 1500 (15 seconds)
-    if let Some(val) = sysfs
-        .read_optional("proc/sys/vm/dirty_writeback_centisecs")
-        .unwrap_or(None)
-        && val.parse::<u32>().unwrap_or(0) < 1500
+    // Dirty writeback interval
+    if let Some(target) = knobs.dirty_writeback
+        && let Some(val) = sysfs
+            .read_optional("proc/sys/vm/dirty_writeback_centisecs")
+            .unwrap_or(None)
+        && val.parse::<u32>().unwrap_or(0) < target
     {
         plan.sysfs_writes.push(PlannedSysfsWrite {
             path: "/proc/sys/vm/dirty_writeback_centisecs".to_string(),
-            value: "1500".to_string(),
+            value: target.to_string(),
             description: "Increase dirty writeback interval to reduce storage wakeups".to_string(),
         });
     }
 
     // Kernel params
-    if hw.kernel_param_value("acpi.ec_no_wakeup").as_deref() != Some("1") {
-        plan.kernel_params.push("acpi.ec_no_wakeup=1".to_string());
-    }
-    if hw.kernel_param_value("rtc_cmos.use_acpi_alarm").as_deref() != Some("1") {
-        plan.kernel_params
-            .push("rtc_cmos.use_acpi_alarm=1".to_string());
-    }
-    if hw.gpu.is_amd()
-        && hw
-            .kernel_param_value("amdgpu.abmlevel")
-            .and_then(|v| v.parse::<u32>().ok())
-            .is_none_or(|v| v < 3)
-    {
-        plan.kernel_params.push("amdgpu.abmlevel=3".to_string());
-    }
-
-    // Services to disable
-    for svc in &["tlp.service", "power-profiles-daemon.service"] {
-        if is_service_active_or_enabled(svc) {
-            plan.services_to_disable.push(svc.to_string());
+    if knobs.kernel_params {
+        if hw.kernel_param_value("acpi.ec_no_wakeup").as_deref() != Some("1") {
+            plan.kernel_params.push("acpi.ec_no_wakeup=1".to_string());
+        }
+        if hw.kernel_param_value("rtc_cmos.use_acpi_alarm").as_deref() != Some("1") {
+            plan.kernel_params
+                .push("rtc_cmos.use_acpi_alarm=1".to_string());
+        }
+        if hw.gpu.is_amd()
+            && hw
+                .kernel_param_value("amdgpu.abmlevel")
+                .and_then(|v| v.parse::<u32>().ok())
+                .is_none_or(|v| v < 3)
+        {
+            plan.kernel_params.push("amdgpu.abmlevel=3".to_string());
         }
     }
 
-    // ACPI wakeup sources to disable:
-    // only USB/XHCI controllers on PCI, excluding the essential XHC0 controller.
-    for source in &hw.platform.acpi_wakeup_sources {
-        if should_disable_acpi_wakeup_source(source, hw) {
-            plan.acpi_wakeup_disable.push(source.device.clone());
+    // Services to disable — tlp/power-profiles-daemon can overwrite sysfs values we set
+    if knobs.has_any_active() {
+        for svc in &["tlp.service", "power-profiles-daemon.service"] {
+            if is_service_active_or_enabled(svc) {
+                plan.services_to_disable.push(svc.to_string());
+            }
+        }
+    }
+
+    // ACPI wakeup sources to disable
+    if knobs.acpi_wakeup_filter {
+        for source in &hw.platform.acpi_wakeup_sources {
+            if should_disable_acpi_wakeup_source(source, hw) {
+                plan.acpi_wakeup_disable.push(source.device.clone());
+            }
         }
     }
 
@@ -1136,22 +1159,35 @@ mod tests {
         }
     }
 
+    fn moderate_knobs() -> PresetKnobs {
+        crate::preset::Preset::Moderate.knobs()
+    }
+
     #[test]
     fn test_resolve_epp_adaptive_low_battery() {
         let config = adaptive_epp_config();
-        assert_eq!(resolve_epp(&config, Some(15)), "power");
+        assert_eq!(
+            resolve_epp(&config, Some(15), &moderate_knobs(), false),
+            Some("power".to_string())
+        );
     }
 
     #[test]
     fn test_resolve_epp_adaptive_mid_battery() {
         let config = adaptive_epp_config();
-        assert_eq!(resolve_epp(&config, Some(35)), "balance_power");
+        assert_eq!(
+            resolve_epp(&config, Some(35), &moderate_knobs(), false),
+            Some("balance_power".to_string())
+        );
     }
 
     #[test]
     fn test_resolve_epp_adaptive_high_battery() {
         let config = adaptive_epp_config();
-        assert_eq!(resolve_epp(&config, Some(75)), "balance_performance");
+        assert_eq!(
+            resolve_epp(&config, Some(75), &moderate_knobs(), false),
+            Some("balance_performance".to_string())
+        );
     }
 
     #[test]
@@ -1160,12 +1196,31 @@ mod tests {
             adaptive: false,
             ..Default::default()
         };
-        assert_eq!(resolve_epp(&config, Some(75)), "balance_power");
+        // Not adaptive, falls back to knob's EPP ("balance_power" for moderate)
+        assert_eq!(
+            resolve_epp(&config, Some(75), &moderate_knobs(), false),
+            Some("balance_power".to_string())
+        );
     }
 
     #[test]
     fn test_resolve_epp_adaptive_no_battery() {
         let config = adaptive_epp_config();
-        assert_eq!(resolve_epp(&config, None), "balance_power");
+        // No battery percent, falls back to knob's EPP
+        assert_eq!(
+            resolve_epp(&config, None, &moderate_knobs(), false),
+            Some("balance_power".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_epp_off_preset() {
+        let config = EppConfig {
+            adaptive: false,
+            ..Default::default()
+        };
+        let off_knobs = crate::preset::Preset::Off.knobs();
+        // Off preset has no EPP
+        assert_eq!(resolve_epp(&config, Some(50), &off_knobs, false), None);
     }
 }

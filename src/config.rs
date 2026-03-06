@@ -1,22 +1,99 @@
+use crate::preset::{Preset, PresetKnobs};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 /// Top-level bop configuration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BopConfig {
+    pub preset: Option<Preset>,
     pub auto: AutoConfig,
     pub epp: EppConfig,
     pub brightness: BrightnessConfig,
     pub inhibitors: InhibitorConfig,
     pub notifications: NotificationConfig,
+    #[serde(default)]
+    pub overrides: KnobOverrides,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AutoConfig {
-    /// Enable aggressive optimizations in auto mode.
+    /// Deprecated: use top-level `preset` instead.
+    /// If true and no preset is set, treated as preset = "supersaver".
+    #[serde(default)]
     pub aggressive: bool,
+}
+
+/// Per-knob overrides applied on top of the preset.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KnobOverrides {
+    pub epp: Option<String>,
+    pub aspm_policy: Option<String>,
+    pub pci_runtime_pm: Option<bool>,
+    pub audio_power_save: Option<bool>,
+    pub nmi_watchdog_disable: Option<bool>,
+    pub dirty_writeback: Option<u32>,
+    pub kernel_params: Option<bool>,
+    pub acpi_wakeup_filter: Option<bool>,
+    pub gpu_dpm: Option<bool>,
+    pub turbo_boost: Option<bool>,
+}
+
+/// Resolve the effective preset: cli_preset > config.preset > migration > Moderate.
+pub fn resolve_preset(config: &BopConfig, cli_preset: Option<Preset>) -> Preset {
+    cli_preset.or(config.preset).unwrap_or_else(|| {
+        if config.auto.aggressive && config.preset.is_none() {
+            eprintln!("warning: `auto.aggressive = true` is deprecated; migrating to preset = \"supersaver\"");
+            eprintln!("         Please update your config to use `preset = \"supersaver\"` instead.");
+            Preset::Supersaver
+        } else {
+            Preset::Moderate
+        }
+    })
+}
+
+/// Resolve the effective knobs: start from preset, then apply config.overrides on top.
+pub fn resolve_knobs(config: &BopConfig, preset: Preset) -> PresetKnobs {
+    let mut knobs = preset.knobs();
+
+    // Apply overrides
+    let o = &config.overrides;
+    if let Some(ref epp) = o.epp {
+        knobs.epp = Some(Cow::Owned(epp.clone()));
+        knobs.epp_locked = true;
+    }
+    if let Some(ref aspm) = o.aspm_policy {
+        knobs.aspm_policy = Some(Cow::Owned(aspm.clone()));
+    }
+    if let Some(v) = o.pci_runtime_pm {
+        knobs.pci_runtime_pm = v;
+    }
+    if let Some(v) = o.audio_power_save {
+        knobs.audio_power_save = v;
+    }
+    if let Some(v) = o.nmi_watchdog_disable {
+        knobs.nmi_watchdog_disable = v;
+    }
+    if let Some(v) = o.dirty_writeback {
+        knobs.dirty_writeback = Some(v);
+    }
+    if let Some(v) = o.kernel_params {
+        knobs.kernel_params = v;
+    }
+    if let Some(v) = o.acpi_wakeup_filter {
+        knobs.acpi_wakeup_filter = v;
+    }
+    if let Some(v) = o.gpu_dpm {
+        knobs.gpu_dpm = v;
+    }
+    if let Some(v) = o.turbo_boost {
+        knobs.turbo_boost = Some(v);
+    }
+
+    knobs
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -155,6 +232,28 @@ pub fn default_config_toml() -> String {
 # System config: /etc/bop/config.toml
 # User config:   ~/.config/bop/config.toml
 # User config merges on top of system config at the table level.
+
+# Power optimization preset. Controls the aggressiveness of optimizations.
+# Options: off, default, moderate, saver, supersaver
+# - off:         No changes (passthrough)
+# - default:     Minimal safe tweaks (audio, NMI, writeback, kernel params)
+# - moderate:    Recommended balance (EPP, ASPM powersave, PCI/USB runtime PM)
+# - saver:       Aggressive savings (force low-power profile, all of moderate)
+# - supersaver:  Maximum savings (turbo off, ASPM powersupersave, all USB)
+# preset = \"moderate\"
+
+# Per-knob overrides applied on top of the preset.
+# [overrides]
+# epp = \"balance_power\"
+# aspm_policy = \"powersave\"
+# pci_runtime_pm = true
+# audio_power_save = true
+# nmi_watchdog_disable = true
+# dirty_writeback = 1500
+# kernel_params = true
+# acpi_wakeup_filter = true
+# gpu_dpm = true
+# turbo_boost = false
 ";
     let body = toml::to_string_pretty(&BopConfig::default())
         .unwrap_or_else(|_| String::from("# failed to serialize defaults\n"));
@@ -248,6 +347,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = BopConfig::default();
+        assert!(config.preset.is_none());
         assert!(!config.auto.aggressive);
         assert!(!config.epp.adaptive);
         assert_eq!(config.epp.thresholds.len(), 3);
@@ -398,5 +498,69 @@ mod tests {
             config.brightness.dim_percent,
             deserialized.brightness.dim_percent
         );
+    }
+
+    #[test]
+    fn test_preset_in_config() {
+        let toml_str = r#"
+            preset = "saver"
+        "#;
+        let config: BopConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.preset, Some(Preset::Saver));
+    }
+
+    #[test]
+    fn test_aggressive_migration() {
+        let config = BopConfig {
+            auto: AutoConfig { aggressive: true },
+            ..Default::default()
+        };
+        // resolve_preset should also migrate
+        assert_eq!(resolve_preset(&config, None), Preset::Supersaver);
+        let knobs = resolve_knobs(&config, Preset::Supersaver);
+        // aggressive=true with no preset should migrate to supersaver
+        assert_eq!(knobs.epp.as_deref(), Some("power"));
+        assert_eq!(knobs.aspm_policy.as_deref(), Some("powersupersave"));
+        assert_eq!(knobs.turbo_boost, Some(false));
+    }
+
+    #[test]
+    fn test_knob_overrides() {
+        let config = BopConfig {
+            preset: Some(Preset::Moderate),
+            overrides: KnobOverrides {
+                turbo_boost: Some(false),
+                pci_runtime_pm: Some(false),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let knobs = resolve_knobs(&config, Preset::Moderate);
+        // Moderate defaults
+        assert_eq!(knobs.epp.as_deref(), Some("balance_power"));
+        assert_eq!(knobs.aspm_policy.as_deref(), Some("powersave"));
+        // Overridden
+        assert_eq!(knobs.turbo_boost, Some(false));
+        assert!(!knobs.pci_runtime_pm);
+    }
+
+    #[test]
+    fn test_cli_preset_overrides_config_preset() {
+        let config = BopConfig {
+            preset: Some(Preset::Off),
+            ..Default::default()
+        };
+        let knobs = resolve_knobs(&config, Preset::Supersaver);
+        assert_eq!(knobs.epp.as_deref(), Some("power"));
+        assert_eq!(knobs.turbo_boost, Some(false));
+    }
+
+    #[test]
+    fn test_resolve_knobs_default_is_moderate() {
+        let config = BopConfig::default();
+        let knobs = resolve_knobs(&config, Preset::Moderate);
+        assert_eq!(knobs.epp.as_deref(), Some("balance_power"));
+        assert_eq!(knobs.aspm_policy.as_deref(), Some("powersave"));
+        assert!(knobs.pci_runtime_pm);
     }
 }

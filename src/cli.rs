@@ -1,3 +1,4 @@
+use crate::preset::Preset;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 use std::path::PathBuf;
@@ -16,16 +17,31 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub json: bool,
 
-    /// Enable aggressive optimizations that trade performance for battery life.
-    /// Includes deeper PCIe sleep states (L1.1/L1.2), lower TDP, turbo boost
-    /// disable, and full USB autosuspend. May cause WiFi instability, input
-    /// latency, or reduced performance.
-    #[arg(long, global = true)]
+    /// Power optimization preset: off, default, moderate, saver, supersaver
+    #[arg(long, global = true, value_enum, conflicts_with = "aggressive")]
+    pub preset: Option<Preset>,
+
+    /// Deprecated: alias for --preset supersaver
+    #[arg(long, global = true, hide = true, conflicts_with = "preset")]
     pub aggressive: bool,
 
     /// Path to config file (overrides system/user configs)
     #[arg(long, global = true)]
     pub config: Option<PathBuf>,
+}
+
+impl Cli {
+    /// Return the effective preset from CLI flags.
+    /// --preset takes priority; --aggressive maps to Supersaver.
+    pub fn effective_preset(&self) -> Option<Preset> {
+        if let Some(p) = self.preset {
+            Some(p)
+        } else if self.aggressive {
+            Some(Preset::Supersaver)
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Subcommand)]
