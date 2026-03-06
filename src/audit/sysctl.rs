@@ -1,13 +1,15 @@
 use crate::audit::{Finding, Severity};
+use crate::preset::PresetKnobs;
 use crate::sysfs::SysfsRoot;
 
-pub fn check(sysfs: &SysfsRoot) -> Vec<Finding> {
+pub fn check_with_knobs(sysfs: &SysfsRoot, knobs: &PresetKnobs) -> Vec<Finding> {
     let mut findings = Vec::new();
 
-    // NMI watchdog
-    if let Some(val) = sysfs
-        .read_optional("proc/sys/kernel/nmi_watchdog")
-        .unwrap_or(None)
+    // NMI watchdog — only when the knob would disable it
+    if knobs.nmi_watchdog_disable
+        && let Some(val) = sysfs
+            .read_optional("proc/sys/kernel/nmi_watchdog")
+            .unwrap_or(None)
         && val == "1"
     {
         findings.push(
@@ -24,11 +26,12 @@ pub fn check(sysfs: &SysfsRoot) -> Vec<Finding> {
         );
     }
 
-    // Dirty writeback interval
-    if let Some(val) = sysfs
-        .read_optional("proc/sys/vm/dirty_writeback_centisecs")
-        .unwrap_or(None)
-        && val.parse::<u32>().unwrap_or(0) < 1500
+    // Dirty writeback interval — only when the knob sets a target
+    if let Some(target) = knobs.dirty_writeback
+        && let Some(val) = sysfs
+            .read_optional("proc/sys/vm/dirty_writeback_centisecs")
+            .unwrap_or(None)
+        && val.parse::<u32>().unwrap_or(0) < target
     {
         findings.push(
             Finding::new(
@@ -37,7 +40,7 @@ pub fn check(sysfs: &SysfsRoot) -> Vec<Finding> {
                 "Disk writeback interval too frequent - wakes storage unnecessarily",
             )
             .current(&val)
-            .recommended("1500")
+            .recommended(target.to_string())
             .impact("Reduces storage wakeups (minor savings on NVMe)")
             .path("/proc/sys/vm/dirty_writeback_centisecs")
             .weight(2),

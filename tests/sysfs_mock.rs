@@ -2,12 +2,22 @@ use bop::apply;
 use bop::audit;
 use bop::config::{BopConfig, EppConfig, EppHint, EppThreshold};
 use bop::detect::HardwareInfo;
+use bop::preset;
+use bop::preset::Preset;
 use bop::profile;
 use bop::snapshot::Snapshot;
 use bop::sysfs::SysfsRoot;
 use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
+
+fn moderate_knobs() -> bop::preset::PresetKnobs {
+    Preset::Moderate.knobs()
+}
+
+fn supersaver_knobs() -> bop::preset::PresetKnobs {
+    Preset::Supersaver.knobs()
+}
 
 /// Create a mock sysfs tree that simulates a Framework 16 AMD system
 /// with suboptimal power settings (the "before" state).
@@ -229,7 +239,7 @@ fn test_build_plan_updates_wrong_kernel_param_values() {
 
     let sysfs = SysfsRoot::new(tmp.path());
     let hw = HardwareInfo::detect(&sysfs);
-    let plan = apply::build_plan(&hw, &sysfs);
+    let plan = apply::build_plan(&hw, &sysfs, &moderate_knobs(), None);
 
     assert!(
         plan.kernel_params
@@ -259,7 +269,7 @@ fn test_build_plan_skips_abmlevel_at_or_above_3() {
 
     let sysfs = SysfsRoot::new(tmp.path());
     let hw = HardwareInfo::detect(&sysfs);
-    let plan = apply::build_plan(&hw, &sysfs);
+    let plan = apply::build_plan(&hw, &sysfs, &moderate_knobs(), None);
 
     assert!(
         !plan
@@ -356,7 +366,7 @@ fn test_apply_plan_only_disables_usb_wake_sources() {
 
     let sysfs = SysfsRoot::new(tmp.path());
     let hw = HardwareInfo::detect(&sysfs);
-    let plan = apply::build_plan(&hw, &sysfs);
+    let plan = apply::build_plan(&hw, &sysfs, &moderate_knobs(), None);
 
     assert!(plan.acpi_wakeup_disable.contains(&"XHC1".to_string()));
     assert!(plan.acpi_wakeup_disable.contains(&"XHC3".to_string()));
@@ -383,7 +393,7 @@ fn test_apply_plan_does_not_disable_usb4_nhi_wake_source() {
 
     let sysfs = SysfsRoot::new(tmp.path());
     let hw = HardwareInfo::detect(&sysfs);
-    let plan = apply::build_plan(&hw, &sysfs);
+    let plan = apply::build_plan(&hw, &sysfs, &moderate_knobs(), None);
 
     assert!(plan.acpi_wakeup_disable.contains(&"XHC1".to_string()));
     assert!(!plan.acpi_wakeup_disable.contains(&"NHI0".to_string()));
@@ -524,7 +534,7 @@ fn test_build_plan_includes_usb_autosuspend() {
 
     let sysfs = SysfsRoot::new(tmp.path());
     let hw = HardwareInfo::detect(&sysfs);
-    let plan = apply::build_plan(&hw, &sysfs);
+    let plan = apply::build_plan(&hw, &sysfs, &moderate_knobs(), None);
 
     // Should include 1-1 (set to auto)
     assert!(
@@ -567,7 +577,7 @@ fn test_build_plan_includes_audio_and_gpu_dpm() {
 
     let sysfs = SysfsRoot::new(tmp.path());
     let hw = HardwareInfo::detect(&sysfs);
-    let plan = apply::build_plan(&hw, &sysfs);
+    let plan = apply::build_plan(&hw, &sysfs, &moderate_knobs(), None);
 
     // Audio power_save -> 1
     assert!(
@@ -607,7 +617,7 @@ fn test_status_sysfs_active_and_drifted() {
     let hw = HardwareInfo::detect(&sysfs);
 
     // Build a plan to see what changes would be made.
-    let plan = apply::build_plan(&hw, &sysfs);
+    let plan = apply::build_plan(&hw, &sysfs, &moderate_knobs(), None);
 
     // Verify the plan includes EPP and platform profile writes.
     assert!(
@@ -698,7 +708,7 @@ fn test_revert_restores_sysfs_values_integration() {
     let hw = HardwareInfo::detect(&sysfs);
 
     // Build a plan to see what the optimizer would change.
-    let plan = apply::build_plan(&hw, &sysfs);
+    let plan = apply::build_plan(&hw, &sysfs, &moderate_knobs(), None);
     assert!(
         !plan.sysfs_writes.is_empty(),
         "Plan should have sysfs writes"
@@ -821,7 +831,7 @@ fn test_apply_then_revert_round_trip() {
     }
 
     // Build plan and check it wants to change these paths.
-    let plan = apply::build_plan(&hw, &sysfs);
+    let plan = apply::build_plan(&hw, &sysfs, &moderate_knobs(), None);
 
     // Map fixture-relative paths to what the plan would write.
     let plan_values: Vec<(&str, &str)> = vec![
@@ -909,7 +919,8 @@ fn test_audit_nmi_watchdog_enabled() {
     fs::write(nmi_dir.join("nmi_watchdog"), "1\n").unwrap();
 
     let sysfs = SysfsRoot::new(tmp.path());
-    let findings = audit::sysctl::check(&sysfs);
+    let knobs = preset::Preset::Moderate.knobs();
+    let findings = audit::sysctl::check_with_knobs(&sysfs, &knobs);
 
     let nmi_finding = findings
         .iter()
@@ -933,7 +944,8 @@ fn test_audit_dirty_writeback_low() {
     fs::write(vm_dir.join("dirty_writeback_centisecs"), "500\n").unwrap();
 
     let sysfs = SysfsRoot::new(tmp.path());
-    let findings = audit::sysctl::check(&sysfs);
+    let knobs = preset::Preset::Moderate.knobs();
+    let findings = audit::sysctl::check_with_knobs(&sysfs, &knobs);
 
     let wb_finding = findings
         .iter()
@@ -962,7 +974,7 @@ fn test_build_plan_includes_sysctl_writes() {
 
     let sysfs = SysfsRoot::new(tmp.path());
     let hw = HardwareInfo::detect(&sysfs);
-    let plan = apply::build_plan(&hw, &sysfs);
+    let plan = apply::build_plan(&hw, &sysfs, &moderate_knobs(), None);
 
     assert!(
         plan.sysfs_writes
@@ -1234,7 +1246,8 @@ fn test_generic_laptop_audit_runs_generic_checks() {
     let mut findings = Vec::new();
     findings.extend(audit::cpu_power::check(&hw));
     findings.extend(audit::pci_power::check(&hw));
-    findings.extend(audit::sysctl::check(&sysfs));
+    let knobs = preset::Preset::Moderate.knobs();
+    findings.extend(audit::sysctl::check_with_knobs(&sysfs, &knobs));
 
     // Should flag suboptimal EPP
     assert!(
@@ -1395,7 +1408,8 @@ fn test_snapshot_framework16_audit() {
     let kernel_findings = audit::kernel_params::check(&hw);
     let pci_findings = audit::pci_power::check(&hw);
     let gpu_findings = audit::gpu_power::check(&hw);
-    let sysctl_findings = audit::sysctl::check(&sysfs);
+    let knobs = preset::Preset::Moderate.knobs();
+    let sysctl_findings = audit::sysctl::check_with_knobs(&sysfs, &knobs);
 
     let mut all_findings = Vec::new();
     all_findings.extend(cpu_findings);
@@ -1467,7 +1481,7 @@ fn test_snapshot_build_plan_normal() {
     let sysfs = snap.materialize(tmp.path()).unwrap();
 
     let hw = HardwareInfo::detect(&sysfs);
-    let plan = apply::build_plan(&hw, &sysfs);
+    let plan = apply::build_plan(&hw, &sysfs, &moderate_knobs(), None);
 
     // Normal mode: snapshot has "balanced" platform profile — should NOT force low-power
     assert!(
@@ -1486,7 +1500,7 @@ fn test_snapshot_build_plan_aggressive() {
     let sysfs = snap.materialize(tmp.path()).unwrap();
 
     let hw = HardwareInfo::detect(&sysfs);
-    let plan = apply::build_plan_aggressive(&hw, &sysfs);
+    let plan = apply::build_plan(&hw, &sysfs, &supersaver_knobs(), None);
 
     // Aggressive mode: should force low-power
     assert!(
@@ -1510,6 +1524,100 @@ fn test_snapshot_build_plan_aggressive() {
             .iter()
             .any(|w| w.path.contains("boost") && w.value == "0"),
         "Aggressive mode should disable CPU boost"
+    );
+}
+
+#[test]
+fn test_build_plan_off_preset_produces_empty_plan() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+
+    let off_knobs = Preset::Off.knobs();
+    let plan = apply::build_plan(&hw, &sysfs, &off_knobs, None);
+
+    assert!(
+        plan.sysfs_writes.is_empty(),
+        "Off preset should not write sysfs"
+    );
+    assert!(
+        plan.kernel_params.is_empty(),
+        "Off preset should not add kernel params"
+    );
+    assert!(
+        plan.services_to_disable.is_empty(),
+        "Off preset should not disable services"
+    );
+    assert!(
+        plan.acpi_wakeup_disable.is_empty(),
+        "Off preset should not disable ACPI wakeup"
+    );
+}
+
+#[test]
+fn test_build_plan_off_preset_ignores_adaptive_epp() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+
+    let off_knobs = Preset::Off.knobs();
+    let config = BopConfig {
+        epp: EppConfig {
+            adaptive: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let plan = apply::build_plan(&hw, &sysfs, &off_knobs, Some(&config));
+
+    assert!(
+        !plan
+            .sysfs_writes
+            .iter()
+            .any(|w| w.path.contains("energy_performance_preference")),
+        "Off preset should not write EPP even with adaptive config"
+    );
+}
+
+#[test]
+fn test_build_plan_default_preset_only_minimal_changes() {
+    let tmp = TempDir::new().unwrap();
+    create_framework16_fixture(tmp.path());
+    let sysfs = SysfsRoot::new(tmp.path());
+    let hw = HardwareInfo::detect(&sysfs);
+
+    let default_knobs = Preset::Default.knobs();
+    let plan = apply::build_plan(&hw, &sysfs, &default_knobs, None);
+
+    // Default should NOT touch EPP, ASPM, PCI runtime PM, USB, GPU DPM
+    assert!(
+        !plan
+            .sysfs_writes
+            .iter()
+            .any(|w| w.path.contains("energy_performance_preference")),
+        "Default should not set EPP"
+    );
+    assert!(
+        !plan
+            .sysfs_writes
+            .iter()
+            .any(|w| w.path.contains("pcie_aspm")),
+        "Default should not set ASPM"
+    );
+    assert!(
+        !plan
+            .sysfs_writes
+            .iter()
+            .any(|w| w.path.contains("/bus/pci/")),
+        "Default should not set PCI runtime PM"
+    );
+
+    // Default SHOULD still add kernel params (fixture is missing them)
+    assert!(
+        !plan.kernel_params.is_empty(),
+        "Default should add kernel params"
     );
 }
 
@@ -1609,7 +1717,7 @@ fn test_adaptive_epp_low_battery_uses_power() {
         ..Default::default()
     };
 
-    let plan = apply::build_plan_with_config(&hw, &sysfs, &config);
+    let plan = apply::build_plan(&hw, &sysfs, &moderate_knobs(), Some(&config));
 
     // All EPP writes should target "power" for low battery
     let epp_writes: Vec<_> = plan
@@ -1640,7 +1748,7 @@ fn test_adaptive_epp_mid_battery_uses_balance_power() {
         ..Default::default()
     };
 
-    let plan = apply::build_plan_with_config(&hw, &sysfs, &config);
+    let plan = apply::build_plan(&hw, &sysfs, &moderate_knobs(), Some(&config));
 
     let epp_writes: Vec<_> = plan
         .sysfs_writes
@@ -1673,7 +1781,7 @@ fn test_adaptive_epp_high_battery_uses_balance_performance() {
         ..Default::default()
     };
 
-    let plan = apply::build_plan_with_config(&hw, &sysfs, &config);
+    let plan = apply::build_plan(&hw, &sysfs, &moderate_knobs(), Some(&config));
 
     // At 85%, EPP = balance_performance, which is the same as the fixture's current value.
     // So there should be NO EPP writes (no change needed).
@@ -1714,7 +1822,7 @@ fn test_adaptive_epp_custom_thresholds() {
         ..Default::default()
     };
 
-    let plan = apply::build_plan_with_config(&hw, &sysfs, &config);
+    let plan = apply::build_plan(&hw, &sysfs, &moderate_knobs(), Some(&config));
 
     let epp_writes: Vec<_> = plan
         .sysfs_writes
@@ -1742,7 +1850,7 @@ fn test_adaptive_epp_disabled_uses_balance_power() {
     // adaptive = false, even at 15% battery
     let config = BopConfig::default();
 
-    let plan = apply::build_plan_with_config(&hw, &sysfs, &config);
+    let plan = apply::build_plan(&hw, &sysfs, &moderate_knobs(), Some(&config));
 
     let epp_writes: Vec<_> = plan
         .sysfs_writes
@@ -1839,8 +1947,8 @@ fn test_build_plan_reduced_excludes_persistent_changes() {
     let sysfs = SysfsRoot::new(tmp.path());
     let hw = HardwareInfo::detect(&sysfs);
 
-    let full_plan = apply::build_plan(&hw, &sysfs);
-    let reduced_plan = apply::build_plan_reduced(&hw, &sysfs);
+    let full_plan = apply::build_plan(&hw, &sysfs, &moderate_knobs(), None);
+    let reduced_plan = apply::build_plan_reduced(&hw, &sysfs, &moderate_knobs(), None);
 
     // Reduced plan should have the same sysfs writes as the full plan
     assert_eq!(

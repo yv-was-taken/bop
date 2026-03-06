@@ -1,6 +1,7 @@
 use crate::apply::ApplyState;
 use crate::detect::HardwareInfo;
 use crate::error::{Error, Result};
+use crate::preset::Preset;
 use crate::sysfs::SysfsRoot;
 use colored::Colorize;
 use std::fs;
@@ -10,12 +11,34 @@ const UDEV_RULE_PATH: &str = "/etc/udev/rules.d/85-bop.rules";
 const LOCK_DIR: &str = "/run/bop";
 const LOCK_FILE: &str = "/run/bop/auto.lock";
 
-fn udev_rule_content(aggressive: bool) -> String {
-    let bin = if aggressive {
-        "/usr/bin/bop --aggressive auto"
-    } else {
-        "/usr/bin/bop auto"
-    };
+fn udev_rule_content(cli_preset: Option<Preset>, config_path: Option<&Path>) -> String {
+    let mut args = String::from("/usr/bin/bop");
+    if let Some(path) = config_path {
+        // Resolve to absolute path (udev runs from /) and quote for spaces.
+        // Use canonicalize for existing files, fall back to joining with cwd.
+        let abs = path.canonicalize().unwrap_or_else(|_| {
+            if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                std::env::current_dir()
+                    .map(|cwd| cwd.join(path))
+                    .unwrap_or_else(|_| path.to_path_buf())
+            }
+        });
+        let path_str = abs.display().to_string();
+        if path_str.contains(' ') || path_str.contains('\'') {
+            // Shell-safe single quoting: replace ' with '\'' (end quote, literal ', start quote)
+            let escaped = path_str.replace('\'', "'\\''");
+            args.push_str(&format!(" --config '{}'", escaped));
+        } else {
+            args.push_str(&format!(" --config {}", path_str));
+        }
+    }
+    if let Some(preset) = cli_preset {
+        args.push_str(&format!(" --preset {}", preset));
+    }
+    args.push_str(" auto");
+    let bin = args;
     format!(
         r#"# Managed by bop — do not edit
 ACTION=="change", SUBSYSTEM=="power_supply", KERNEL!="hidpp_battery*", RUN+="{}"
@@ -30,6 +53,8 @@ pub enum AutoOutcome {
     Applied,
     Reverted,
     NoOp,
+    /// On battery but nothing to change (system already matches preset).
+    AlreadyOptimal,
     NoProfile,
     NoAcAdapter,
 }
@@ -92,6 +117,10 @@ fn log_to_journal(outcome: &AutoOutcome) {
             "debug",
             "No action needed (state already matches power source)",
         ),
+        AutoOutcome::AlreadyOptimal => (
+            "debug",
+            "On battery — system already matches preset, no changes needed",
+        ),
         AutoOutcome::NoProfile => ("warning", "No hardware profile matched — skipping"),
         AutoOutcome::NoAcAdapter => ("debug", "No AC adapter detected"),
     };
@@ -102,7 +131,7 @@ fn log_to_journal(outcome: &AutoOutcome) {
 }
 
 /// Core auto-switching logic. Called by udev or `bop auto`.
-pub fn run(aggressive: bool, config: &crate::config::BopConfig) -> Result<AutoOutcome> {
+pub fn run(cli_preset: Option<Preset>, config: &crate::config::BopConfig) -> Result<AutoOutcome> {
     if !nix::unistd::geteuid().is_root() {
         return Err(Error::NotRoot {
             operation: "auto".to_string(),
@@ -144,20 +173,55 @@ pub fn run(aggressive: bool, config: &crate::config::BopConfig) -> Result<AutoOu
             return Ok(outcome);
         }
 
+        let effective_preset = crate::config::resolve_preset(config, cli_preset);
+        let mut knobs = crate::config::resolve_knobs(config, effective_preset);
         let plan = match scope {
-            crate::inhibitors::ApplyScope::Reduced => crate::apply::build_plan_reduced(&hw, &sysfs),
-            _ => {
-                if aggressive {
-                    crate::apply::build_plan_aggressive_with_config(&hw, &sysfs, config)
-                } else {
-                    crate::apply::build_plan_with_config(&hw, &sysfs, config)
-                }
+            crate::inhibitors::ApplyScope::Reduced => {
+                knobs.clamp_for_reduced();
+                crate::apply::build_plan_reduced(&hw, &sysfs, &knobs, Some(config))
             }
+            _ => crate::apply::build_plan(&hw, &sysfs, &knobs, Some(config)),
         };
 
+        if plan.is_empty() {
+            // Dim backlight even for empty plans (e.g. already-optimized system)
+            let mut dimmed = false;
+            if config.brightness.auto_dim {
+                match crate::brightness::dim(&config.brightness, &sysfs) {
+                    Ok(Some(original)) => {
+                        let state = ApplyState {
+                            timestamp: chrono::Utc::now().to_rfc3339(),
+                            brightness_original: Some(original),
+                            ..Default::default()
+                        };
+                        state.save()?;
+                        dimmed = true;
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        eprintln!("{} Failed to dim backlight: {}", "!".yellow(), e);
+                    }
+                }
+            }
+            let outcome = if dimmed {
+                AutoOutcome::Applied
+            } else {
+                AutoOutcome::AlreadyOptimal
+            };
+            log_to_journal(&outcome);
+
+            if dimmed && config.notifications.enabled && config.notifications.on_apply {
+                let _ = crate::notify::send("bop", "Power optimizations applied (on battery)");
+            }
+
+            return Ok(outcome);
+        }
+
+        // Apply optimizations first, then dim backlight only on success.
+        // This avoids leaving the screen dimmed with no state to restore
+        // if apply fails before any checkpoint.
         let mut state = crate::apply::execute_plan(&plan, &hw, false)?;
 
-        // Dim backlight after applying optimizations
         if config.brightness.auto_dim {
             match crate::brightness::dim(&config.brightness, &sysfs) {
                 Ok(original) => {
@@ -207,35 +271,45 @@ pub fn run(aggressive: bool, config: &crate::config::BopConfig) -> Result<AutoOu
 }
 
 /// Install udev rule and apply immediately if on battery.
-pub fn enable(aggressive: bool) -> Result<()> {
+pub fn enable(
+    cli_preset: Option<Preset>,
+    config: &crate::config::BopConfig,
+    config_path: Option<&Path>,
+) -> Result<()> {
     if !nix::unistd::geteuid().is_root() {
         return Err(Error::NotRoot {
             operation: "auto enable".to_string(),
         });
     }
 
-    let rule = udev_rule_content(aggressive);
+    let effective_preset = crate::config::resolve_preset(config, cli_preset);
+    let rule = udev_rule_content(cli_preset, config_path);
     fs::write(UDEV_RULE_PATH, &rule)
         .map_err(|e| Error::Other(format!("failed to write udev rule: {}", e)))?;
 
     reload_udevd();
 
-    let mode = if aggressive { "aggressive" } else { "normal" };
+    let preset_label = match cli_preset {
+        Some(p) => p.to_string(),
+        None => format!("{} (from config)", effective_preset),
+    };
     println!(
-        "{} Auto-switching enabled (mode: {})",
+        "{} Auto-switching enabled (preset: {})",
         ">>".green(),
-        mode.bold()
+        preset_label.bold()
     );
     println!("  Rule installed at {}", UDEV_RULE_PATH);
 
     // Apply immediately if currently on battery
-    let config = crate::config::load(None);
-    match run(aggressive, &config)? {
+    match run(cli_preset, config)? {
         AutoOutcome::Applied => {
             println!("  {} On battery — optimizations applied.", ">>".green());
         }
         AutoOutcome::NoOp => {
             println!("  On AC power — optimizations will apply when unplugged.");
+        }
+        AutoOutcome::AlreadyOptimal => {
+            println!("  On battery — system already matches preset, no changes needed.");
         }
         AutoOutcome::NoProfile => {
             println!(
@@ -278,7 +352,7 @@ pub fn disable() -> Result<()> {
 #[derive(serde::Serialize)]
 struct AutoStatus {
     enabled: bool,
-    mode: Option<String>,
+    preset: Option<String>,
     ac_online: bool,
     optimizations_applied: bool,
 }
@@ -288,15 +362,22 @@ pub fn status(json: bool) -> Result<()> {
     let rule_path = Path::new(UDEV_RULE_PATH);
     let enabled = rule_path.exists();
 
-    let mode = if enabled {
+    let preset_name = if enabled {
         let content = fs::read_to_string(rule_path).unwrap_or_default();
         if content.contains("--aggressive") {
-            "aggressive"
+            "supersaver".to_string()
+        } else if let Some(pos) = content.find("--preset ") {
+            let rest = &content[pos + 9..];
+            rest.split_whitespace()
+                .next()
+                .unwrap_or("moderate")
+                .to_string()
         } else {
-            "normal"
+            // Legacy rule without --preset; actual preset comes from config resolution
+            "config-defined".to_string()
         }
     } else {
-        "n/a"
+        "n/a".to_string()
     };
 
     let sysfs = SysfsRoot::system();
@@ -306,8 +387,8 @@ pub fn status(json: bool) -> Result<()> {
     if json {
         let status = AutoStatus {
             enabled,
-            mode: if enabled {
-                Some(mode.to_string())
+            preset: if enabled {
+                Some(preset_name.clone())
             } else {
                 None
             },
@@ -332,7 +413,7 @@ pub fn status(json: bool) -> Result<()> {
         }
     );
     if enabled {
-        println!("  {} {}", "Mode:".bold(), mode);
+        println!("  {} {}", "Preset:".bold(), preset_name);
     }
 
     if hw.ac.found {
@@ -378,32 +459,63 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_udev_rule_normal() {
-        let rule = udev_rule_content(false);
-        assert!(rule.contains("RUN+=\"/usr/bin/bop auto\""));
-        assert!(!rule.contains("--aggressive"));
+    fn test_udev_rule_with_preset() {
+        let rule = udev_rule_content(Some(Preset::Moderate), None);
+        assert!(rule.contains("--preset moderate"));
         assert!(rule.contains("KERNEL!=\"hidpp_battery*\""));
         assert!(rule.contains("SUBSYSTEM==\"power_supply\""));
     }
 
     #[test]
-    fn test_udev_rule_aggressive() {
-        let rule = udev_rule_content(true);
-        assert!(rule.contains("RUN+=\"/usr/bin/bop --aggressive auto\""));
-        assert!(rule.contains("--aggressive"));
+    fn test_udev_rule_supersaver() {
+        let rule = udev_rule_content(Some(Preset::Supersaver), None);
+        assert!(rule.contains("RUN+=\"/usr/bin/bop --preset supersaver auto\""));
+        assert!(rule.contains("--preset supersaver"));
+    }
+
+    #[test]
+    fn test_udev_rule_saver() {
+        let rule = udev_rule_content(Some(Preset::Saver), None);
+        assert!(rule.contains("--preset saver"));
+    }
+
+    #[test]
+    fn test_udev_rule_no_preset() {
+        let rule = udev_rule_content(None, None);
+        assert!(!rule.contains("--preset"));
+        assert!(rule.contains("RUN+=\"/usr/bin/bop auto\""));
+        assert!(rule.contains("KERNEL!=\"hidpp_battery*\""));
+    }
+
+    #[test]
+    fn test_udev_rule_with_config_path() {
+        let path = Path::new("/etc/bop/custom.toml");
+        let rule = udev_rule_content(Some(Preset::Moderate), Some(path));
+        assert!(rule.contains("--config /etc/bop/custom.toml"));
+        assert!(rule.contains("--preset moderate"));
+        assert!(rule.contains(" auto"));
+    }
+
+    #[test]
+    fn test_udev_rule_config_path_no_preset() {
+        let path = Path::new("/etc/bop/custom.toml");
+        let rule = udev_rule_content(None, Some(path));
+        assert!(rule.contains("--config /etc/bop/custom.toml"));
+        assert!(!rule.contains("--preset"));
+        assert!(rule.contains(" auto"));
     }
 
     #[test]
     fn test_auto_status_json_serialization() {
         let status = AutoStatus {
             enabled: true,
-            mode: Some("normal".to_string()),
+            preset: Some("moderate".to_string()),
             ac_online: true,
             optimizations_applied: false,
         };
         let json = serde_json::to_string_pretty(&status).unwrap();
         assert!(json.contains("\"enabled\": true"));
-        assert!(json.contains("\"mode\": \"normal\""));
+        assert!(json.contains("\"preset\": \"moderate\""));
         assert!(json.contains("\"ac_online\": true"));
         assert!(json.contains("\"optimizations_applied\": false"));
     }

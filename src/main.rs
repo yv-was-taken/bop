@@ -2,21 +2,26 @@ use anyhow::Result;
 use bop::cli::{AutoAction, Cli, Command, ConfigAction, WakeAction};
 use bop::config::BopConfig;
 use bop::detect::HardwareInfo;
+use bop::preset::Preset;
 use bop::sysfs::SysfsRoot;
 use clap::Parser;
 use colored::Colorize;
+use std::path::Path;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let config = bop::config::load(cli.config.as_ref());
+    let cli_preset = cli.effective_preset();
 
     match cli.command {
-        Command::Audit => cmd_audit(cli.json, cli.aggressive)?,
-        Command::Apply { dry_run } => cmd_apply(dry_run, cli.aggressive)?,
+        Command::Audit => cmd_audit(cli.json, cli_preset, &config)?,
+        Command::Apply { dry_run } => cmd_apply(dry_run, cli_preset, &config)?,
         Command::Monitor => cmd_monitor()?,
         Command::Revert => cmd_revert()?,
         Command::Status => cmd_status(cli.json)?,
-        Command::Auto { action } => cmd_auto(action, cli.aggressive, &config, cli.json)?,
+        Command::Auto { action } => {
+            cmd_auto(action, cli_preset, &config, cli.json, cli.config.as_deref())?
+        }
         Command::Snapshot { output } => cmd_snapshot(output)?,
         Command::Wake { action } => cmd_wake(action)?,
         Command::Config { action } => cmd_config(action, &config)?,
@@ -26,9 +31,24 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn cmd_audit(json: bool, aggressive: bool) -> Result<()> {
+fn cmd_audit(json: bool, cli_preset: Option<Preset>, config: &BopConfig) -> Result<()> {
+    let effective_preset = bop::config::resolve_preset(config, cli_preset);
+    let mut knobs = bop::config::resolve_knobs(config, effective_preset);
+
     let sysfs = SysfsRoot::system();
     let hw = HardwareInfo::detect(&sysfs);
+
+    // Resolve adaptive EPP so audit sees the same target as apply
+    if knobs.epp.is_some()
+        && let Some(resolved) = bop::apply::resolve_epp(
+            &config.epp,
+            hw.battery.capacity_percent,
+            &knobs,
+            knobs.epp_locked,
+        )
+    {
+        knobs.epp = Some(std::borrow::Cow::Owned(resolved));
+    }
 
     // Find matching profile
     let profile = bop::profile::detect_profile(&hw);
@@ -36,7 +56,7 @@ fn cmd_audit(json: bool, aggressive: bool) -> Result<()> {
     if json {
         let (findings, score) = match &profile {
             Some(p) => {
-                let findings = p.audit_with_opts(&hw, aggressive);
+                let findings = p.audit_with_opts(&hw, effective_preset, &knobs);
                 let score = bop::audit::calculate_score(&findings);
                 (findings, score)
             }
@@ -52,36 +72,31 @@ fn cmd_audit(json: bool, aggressive: bool) -> Result<()> {
 
     bop::output::print_hardware_summary(&hw);
 
-    if aggressive {
-        println!(
-            "  {} {}",
-            "Mode:".bold(),
-            "aggressive (trading performance for battery)".yellow()
-        );
-    }
+    println!(
+        "  {} {}",
+        "Preset:".bold(),
+        effective_preset.to_string().cyan()
+    );
 
     match profile {
         Some(ref p) => {
             println!("  {} {}", "Matched profile:".bold(), p.name().green());
 
-            let findings = p.audit_with_opts(&hw, aggressive);
+            let findings = p.audit_with_opts(&hw, effective_preset, &knobs);
             let score = bop::audit::calculate_score(&findings);
             bop::output::print_audit_findings(&findings, score);
 
             if !findings.is_empty() {
-                if aggressive {
-                    println!(
-                        "  Run {} to see what would change, or {} to apply.",
-                        "bop --aggressive apply --dry-run".cyan(),
-                        "sudo bop --aggressive apply".cyan()
-                    );
+                let preset_flag = if cli_preset.is_some() || effective_preset != Preset::Moderate {
+                    format!("--preset {} ", effective_preset)
                 } else {
-                    println!(
-                        "  Run {} to see what would change, or {} to apply.",
-                        "bop apply --dry-run".cyan(),
-                        "sudo bop apply".cyan()
-                    );
-                }
+                    String::new()
+                };
+                println!(
+                    "  Run {} to see what would change, or {} to apply.",
+                    format!("bop {}apply --dry-run", preset_flag).cyan(),
+                    format!("sudo bop {}apply", preset_flag).cyan()
+                );
             }
         }
         None => {
@@ -101,7 +116,10 @@ fn cmd_audit(json: bool, aggressive: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_apply(dry_run: bool, aggressive: bool) -> Result<()> {
+fn cmd_apply(dry_run: bool, cli_preset: Option<Preset>, config: &BopConfig) -> Result<()> {
+    let effective_preset = bop::config::resolve_preset(config, cli_preset);
+    let knobs = bop::config::resolve_knobs(config, effective_preset);
+
     let sysfs = SysfsRoot::system();
     let hw = HardwareInfo::detect(&sysfs);
 
@@ -112,17 +130,35 @@ fn cmd_apply(dry_run: bool, aggressive: bool) -> Result<()> {
         );
     }
 
-    let plan = if aggressive {
-        bop::apply::build_plan_aggressive(&hw, &sysfs)
-    } else {
-        bop::apply::build_plan(&hw, &sysfs)
-    };
+    let plan = bop::apply::build_plan(&hw, &sysfs, &knobs, Some(config));
 
-    if aggressive {
+    if plan.is_empty() {
+        println!();
+        println!(
+            "  {} {}",
+            "Preset:".bold(),
+            effective_preset.to_string().cyan()
+        );
+        println!();
+        println!(
+            "{}",
+            "No changes to apply — system already matches this preset.".green()
+        );
+        return Ok(());
+    }
+
+    println!();
+    println!(
+        "  {} {}",
+        "Preset:".bold(),
+        effective_preset.to_string().cyan()
+    );
+
+    if effective_preset >= Preset::Supersaver {
         println!();
         println!(
             "  {}",
-            "AGGRESSIVE MODE — performance tradeoffs ahead:"
+            "SUPERSAVER MODE — performance tradeoffs ahead:"
                 .red()
                 .bold()
         );
@@ -157,10 +193,10 @@ fn cmd_apply(dry_run: bool, aggressive: bool) -> Result<()> {
     }
 
     // Confirm
-    if aggressive {
+    if effective_preset >= Preset::Supersaver {
         println!(
             "{}",
-            "This will apply AGGRESSIVE optimizations. Performance WILL be reduced."
+            "This will apply SUPERSAVER optimizations. Performance WILL be reduced."
                 .red()
                 .bold()
         );
@@ -306,16 +342,17 @@ fn cmd_status(json: bool) -> Result<()> {
 
 fn cmd_auto(
     action: Option<AutoAction>,
-    aggressive: bool,
+    cli_preset: Option<Preset>,
     config: &BopConfig,
     json: bool,
+    config_path: Option<&Path>,
 ) -> Result<()> {
     match action {
         None => {
             // Bare `bop auto` — called by udev
-            bop::auto::run(aggressive, config)?;
+            bop::auto::run(cli_preset, config)?;
         }
-        Some(AutoAction::Enable) => bop::auto::enable(aggressive)?,
+        Some(AutoAction::Enable) => bop::auto::enable(cli_preset, config, config_path)?,
         Some(AutoAction::Disable) => bop::auto::disable()?,
         Some(AutoAction::Status) => bop::auto::status(json)?,
     }

@@ -1,20 +1,29 @@
 use crate::audit::{Finding, Severity};
+use crate::preset::{Preset, PresetKnobs, UsbPolicy};
 use crate::sysfs::SysfsRoot;
 
 pub fn check(sysfs: &SysfsRoot) -> Vec<Finding> {
-    check_with_opts(sysfs, false)
+    check_with_knobs(sysfs, &Preset::Moderate.knobs())
 }
 
 pub fn check_aggressive(sysfs: &SysfsRoot) -> Vec<Finding> {
-    check_with_opts(sysfs, true)
+    check_with_knobs(sysfs, &Preset::Supersaver.knobs())
 }
 
-fn check_with_opts(sysfs: &SysfsRoot, aggressive: bool) -> Vec<Finding> {
+pub fn check_with_preset(sysfs: &SysfsRoot, preset: Preset) -> Vec<Finding> {
+    check_with_knobs(sysfs, &preset.knobs())
+}
+
+pub fn check_with_knobs(sysfs: &SysfsRoot, knobs: &PresetKnobs) -> Vec<Finding> {
     let mut findings = Vec::new();
 
+    if knobs.usb_autosuspend == UsbPolicy::NoChange {
+        return findings;
+    }
+
+    let all_devices = knobs.usb_autosuspend == UsbPolicy::All;
+
     // Check USB autosuspend
-    // Normal: skip HID input devices (keyboards, mice) and expansion cards.
-    // Aggressive: autosuspend everything.
     let usb_base = "sys/bus/usb/devices";
     if let Ok(devices) = sysfs.list_dir(usb_base) {
         let mut no_autosuspend = 0;
@@ -30,7 +39,7 @@ fn check_with_opts(sysfs: &SysfsRoot, aggressive: bool) -> Vec<Finding> {
             if let Some(control) = sysfs.read_optional(&control_path).unwrap_or(None) {
                 total += 1;
                 if control != "auto" {
-                    if aggressive {
+                    if all_devices {
                         no_autosuspend += 1;
                     } else {
                         let product = sysfs
@@ -67,7 +76,7 @@ fn check_with_opts(sysfs: &SysfsRoot, aggressive: bool) -> Vec<Finding> {
                 )
                 .current(format!("{} devices set to 'on'", no_autosuspend))
                 .recommended("All devices set to 'auto'")
-                .impact(if aggressive {
+                .impact(if all_devices {
                     "Power savings from idle USB devices (may cause input latency)"
                 } else {
                     "Minor power savings from idle USB devices"

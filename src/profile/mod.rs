@@ -3,6 +3,7 @@ pub mod generic_laptop;
 
 use crate::audit::Finding;
 use crate::detect::HardwareInfo;
+use crate::preset::{Preset, PresetKnobs};
 
 /// A hardware profile encodes laptop-specific power optimization knowledge.
 pub trait HardwareProfile: std::fmt::Debug {
@@ -14,11 +15,16 @@ pub trait HardwareProfile: std::fmt::Debug {
 
     /// Run all audit checks specific to this hardware
     fn audit(&self, hw: &HardwareInfo) -> Vec<Finding> {
-        self.audit_with_opts(hw, false)
+        self.audit_with_opts(hw, Preset::Moderate, &Preset::Moderate.knobs())
     }
 
-    /// Run audit checks with aggressive mode option
-    fn audit_with_opts(&self, hw: &HardwareInfo, aggressive: bool) -> Vec<Finding>;
+    /// Run audit checks with preset and resolved knobs (which may include overrides)
+    fn audit_with_opts(
+        &self,
+        hw: &HardwareInfo,
+        preset: Preset,
+        knobs: &PresetKnobs,
+    ) -> Vec<Finding>;
 }
 
 /// Registry of all known hardware profiles.
