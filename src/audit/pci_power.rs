@@ -61,7 +61,11 @@ pub fn check_with_knobs(hw: &HardwareInfo, knobs: &PresetKnobs) -> Vec<Finding> 
                         3,
                         "~0.2-0.5W additional savings (may cause WiFi/NVMe issues)",
                     ),
-                    _ => (Severity::Low, 3, "ASPM policy will be adjusted for power saving"),
+                    _ => (
+                        Severity::Low,
+                        3,
+                        "ASPM policy will be adjusted for power saving",
+                    ),
                 }
             } else {
                 // Moving toward performance

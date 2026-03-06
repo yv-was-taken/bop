@@ -5,8 +5,8 @@ use bop::detect::HardwareInfo;
 use bop::preset::Preset;
 use bop::sysfs::SysfsRoot;
 use clap::Parser;
-use std::path::Path;
 use colored::Colorize;
+use std::path::Path;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -19,7 +19,9 @@ fn main() -> Result<()> {
         Command::Monitor => cmd_monitor()?,
         Command::Revert => cmd_revert()?,
         Command::Status => cmd_status(cli.json)?,
-        Command::Auto { action } => cmd_auto(action, cli_preset, &config, cli.json, cli.config.as_deref())?,
+        Command::Auto { action } => {
+            cmd_auto(action, cli_preset, &config, cli.json, cli.config.as_deref())?
+        }
         Command::Snapshot { output } => cmd_snapshot(output)?,
         Command::Wake { action } => cmd_wake(action)?,
         Command::Config { action } => cmd_config(action, &config)?,
@@ -38,7 +40,12 @@ fn cmd_audit(json: bool, cli_preset: Option<Preset>, config: &BopConfig) -> Resu
 
     // Resolve adaptive EPP so audit sees the same target as apply
     if knobs.epp.is_some()
-        && let Some(resolved) = bop::apply::resolve_epp(&config.epp, hw.battery.capacity_percent, &knobs, knobs.epp_locked)
+        && let Some(resolved) = bop::apply::resolve_epp(
+            &config.epp,
+            hw.battery.capacity_percent,
+            &knobs,
+            knobs.epp_locked,
+        )
     {
         knobs.epp = Some(std::borrow::Cow::Owned(resolved));
     }

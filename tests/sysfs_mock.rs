@@ -1537,8 +1537,14 @@ fn test_build_plan_off_preset_produces_empty_plan() {
     let off_knobs = Preset::Off.knobs();
     let plan = apply::build_plan(&hw, &sysfs, &off_knobs, None);
 
-    assert!(plan.sysfs_writes.is_empty(), "Off preset should not write sysfs");
-    assert!(plan.kernel_params.is_empty(), "Off preset should not add kernel params");
+    assert!(
+        plan.sysfs_writes.is_empty(),
+        "Off preset should not write sysfs"
+    );
+    assert!(
+        plan.kernel_params.is_empty(),
+        "Off preset should not add kernel params"
+    );
     assert!(
         plan.services_to_disable.is_empty(),
         "Off preset should not disable services"

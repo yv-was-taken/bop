@@ -57,7 +57,8 @@ impl HardwareProfile for GenericLaptop {
         if knobs.epp.is_some() || knobs.pci_runtime_pm || knobs.gpu_dpm {
             findings.extend(audit::network_power::check(hw));
         }
-        if knobs.epp.is_some() || knobs.pci_runtime_pm || knobs.gpu_dpm || knobs.acpi_wakeup_filter {
+        if knobs.epp.is_some() || knobs.pci_runtime_pm || knobs.gpu_dpm || knobs.acpi_wakeup_filter
+        {
             findings.extend(audit::sleep::check(hw, &sysfs));
         }
         // Service conflict check — matches apply's has_any_active() gate

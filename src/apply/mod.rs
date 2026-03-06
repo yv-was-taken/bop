@@ -232,7 +232,14 @@ fn build_plan_inner(
     let target_epp = if knobs.epp.is_some() {
         config
             .map(|c| &c.epp)
-            .and_then(|epp_cfg| resolve_epp(epp_cfg, hw.battery.capacity_percent, knobs, knobs.epp_locked))
+            .and_then(|epp_cfg| {
+                resolve_epp(
+                    epp_cfg,
+                    hw.battery.capacity_percent,
+                    knobs,
+                    knobs.epp_locked,
+                )
+            })
             .or_else(|| knobs.epp.as_deref().map(|s| s.to_string()))
     } else {
         None

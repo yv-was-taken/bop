@@ -87,7 +87,11 @@ pub fn check_with_knobs(hw: &HardwareInfo, knobs: &PresetKnobs) -> Vec<Finding> 
                 }
             } else {
                 // Moving to more performant (e.g. adaptive high-battery)
-                (Severity::Info, 1, "EPP will be adjusted for current conditions")
+                (
+                    Severity::Info,
+                    1,
+                    "EPP will be adjusted for current conditions",
+                )
             };
             findings.push(
                 Finding::new(
